@@ -11,7 +11,7 @@ for (let i = 0; i < STAR_COUNT; i++) {
 // --- 2. PHYSICS SOLVER & STATE MODEL ---
 const PIXELS_PER_METER = 20;
 const RIG_CENTER_X = 120;
-const UNEXTENDED_Y = 125; // Pixel Y where x = 0
+const UNEXTENDED_Y = 125;  // Pixel Y where x = 0
 const MIN_X_METERS = -4.2; // Top mechanical stop (near truss)
 const MAX_X_METERS = 5.8;  // Bottom mechanical stop
 
@@ -32,14 +32,12 @@ const Physics = {
         t: 0.0    // Elapsed simulation time (s)
     },
 
-    // Coupled 1st-order ODE derivatives
     getDerivatives: function(x, v, phi) {
         const { m, k, c, F0, g } = this.params;
         const a = (-k * x - c * v + F0 * Math.cos(phi) + m * g) / m;
         return { dx: v, dv: a };
     },
 
-    // 4th-Order Runge-Kutta Integrator with Phase Continuity & Mechanical Stops
     stepRK4: function(dt) {
         const { x, v, phi } = this.state;
         const w = this.params.w;
@@ -66,7 +64,7 @@ const Physics = {
         this.state.phi = (this.state.phi + w * dt) % (2 * Math.PI);
         this.state.t += dt;
 
-        // Enforce hard mechanical boundary stops (inelastic restitution e = 0.25)
+        // Hard mechanical boundary stops (inelastic restitution e = 0.25)
         if (this.state.x < MIN_X_METERS) {
             this.state.x = MIN_X_METERS;
             if (this.state.v < 0) this.state.v = -0.25 * this.state.v;
@@ -87,10 +85,8 @@ const Physics = {
         else if (zeta >= 0.99 && zeta <= 1.01) regime = "CRITICAL";
         else if (zeta > 1.01) regime = "OVERDAMPED";
 
-        // Flag near-resonant forcing when driving frequency matches w0 within 10%
         const isResonant = (F0 > 0) && (Math.abs(w - w0) / w0 < 0.10);
 
-        // Gauge-invariant mechanical energy relative to static equilibrium xEq
         const kinetic = 0.5 * m * (this.state.v ** 2);
         const potentialEff = 0.5 * k * ((this.state.x - xEq) ** 2);
         const energy = kinetic + potentialEff;
@@ -99,7 +95,34 @@ const Physics = {
     }
 };
 
-// --- 3. DOM REFERENCES & SLIDER BINDINGS ---
+// --- 3. PHASE 3 DIAGNOSTICS: PRE-ALLOCATED O(1) RING BUFFERS ---
+const BUFFER_SIZE = 220; // Matches 220px instrument viewport width
+
+const Diagnostics = {
+    xHistory: new Float32Array(BUFFER_SIZE),
+    vHistory: new Float32Array(BUFFER_SIZE),
+    head: 0,
+    count: 0,
+
+    record: function(x, v) {
+        this.xHistory[this.head] = x;
+        this.vHistory[this.head] = v;
+        this.head = (this.head + 1) % BUFFER_SIZE;
+        if (this.count < BUFFER_SIZE) this.count++;
+    },
+
+    // Retrieve sample at logical index i in [0 .. count - 1] (0 = oldest)
+    getSample: function(i) {
+        const start = this.count === BUFFER_SIZE ? this.head : 0;
+        const idx = (start + i) % BUFFER_SIZE;
+        return {
+            x: this.xHistory[idx],
+            v: this.vHistory[idx]
+        };
+    }
+};
+
+// --- 4. DOM REFERENCES & SLIDER BINDINGS ---
 const canvas = document.getElementById('stage');
 const ctx = canvas.getContext('2d');
 
@@ -130,7 +153,7 @@ bindSlider('slider-f0', 'F0', 'val-f0', 'N', 1);
 bindSlider('slider-w', 'w', 'val-w', 'rad/s', 1);
 bindSlider('slider-g', 'g', 'val-g', 'm/s²', 1);
 
-// --- 4. MOUSE INTERACTION CONTROLLER ---
+// --- 5. MOUSE INTERACTION CONTROLLER ---
 const Interaction = {
     isDragging: false,
     isHovering: false,
@@ -160,7 +183,6 @@ canvas.addEventListener('mousedown', (e) => {
     const pos = getCanvasMousePos(e);
     const bounds = getPayloadBounds();
 
-    // Hitbox covers main bus + solar wings
     if (
         pos.x >= bounds.x - 32 &&
         pos.x <= bounds.x + bounds.size + 32 &&
@@ -224,29 +246,59 @@ function releasePayload() {
 canvas.addEventListener('mouseup', releasePayload);
 canvas.addEventListener('mouseleave', releasePayload);
 
-// --- 5. PIXEL RENDERING PIPELINE ---
+// --- 6. STRICT 1-BIT PIXEL PRIMITIVES (ZERO ANTI-ALIASING) ---
+function drawPixelLine(x0, y0, x1, y1, color, thickness = 1) {
+    x0 = Math.round(x0);
+    y0 = Math.round(y0);
+    x1 = Math.round(x1);
+    y1 = Math.round(y1);
+
+    const dx = Math.abs(x1 - x0);
+    const dy = Math.abs(y1 - y0);
+    const sx = x0 < x1 ? 1 : -1;
+    const sy = y0 < y1 ? 1 : -1;
+    let err = dx - dy;
+
+    ctx.fillStyle = color;
+    while (true) {
+        ctx.fillRect(x0, y0, thickness, thickness);
+        if (x0 === x1 && y0 === y1) break;
+        const e2 = 2 * err;
+        if (e2 > -dy) {
+            err -= dy;
+            x0 += sx;
+        }
+        if (e2 < dx) {
+            err += dx;
+            y0 += sy;
+        }
+    }
+}
+
+function drawPixelBezel(x, y, w, h, borderColor) {
+    ctx.fillStyle = '#050505';
+    ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = borderColor;
+    ctx.fillRect(x, y, w, 1);         // Top
+    ctx.fillRect(x, y + h - 1, w, 1); // Bottom
+    ctx.fillRect(x, y, 1, h);         // Left
+    ctx.fillRect(x + w - 1, y, 1, h); // Right
+}
+
+// --- 7. PIXEL RENDERING PIPELINE ---
 function drawStage() {
     ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Draw Left Bay Starfield
+    // Left Bay Starfield
     for (let i = 0; i < STAR_COUNT; i++) {
         ctx.fillStyle = i % 3 === 0 ? '#555555' : '#FFFFFF';
         ctx.fillRect(stars[i].x, stars[i].y, 1, 1);
     }
 
-    // Divider line between Left Physical Rig (0..240) and Right Diagnostics Bay (240..480)
+    // Center Structural Bulkhead (x = 240)
     ctx.fillStyle = '#555555';
     ctx.fillRect(240, 0, 2, canvas.height);
-
-    // Placeholder grid in Right Bay (Prepared for Phase 3 Diagnostics)
-    ctx.fillStyle = '#222222';
-    for (let x = 260; x < 480; x += 20) {
-        ctx.fillRect(x, 0, 1, canvas.height);
-    }
-    for (let y = 20; y < 270; y += 20) {
-        ctx.fillRect(242, y, 238, 1);
-    }
 }
 
 function drawEquilibriumMarkers(xEq) {
@@ -266,7 +318,6 @@ function drawEquilibriumMarkers(xEq) {
 }
 
 function drawTrussAndActuator() {
-    // Structural Orbital Truss
     ctx.fillStyle = '#555555';
     ctx.fillRect(60, 0, 120, 18);
     ctx.fillStyle = '#000000';
@@ -274,7 +325,6 @@ function drawTrussAndActuator() {
         ctx.fillRect(x, 2, 6, 14);
     }
 
-    // Driven Actuator Piston (oscillates visually when F0 > 0)
     const driveOffset = Physics.params.F0 > 0
         ? Math.round((Physics.params.F0 / 30) * 8 * Math.cos(Physics.state.phi))
         : 0;
@@ -290,7 +340,7 @@ function drawTetherAndDamper(anchorY, payloadTopY) {
     const length = payloadTopY - anchorY;
     if (length <= 2) return;
 
-    // 1. Internal Hysteresis Damper Sleeve (scales with c)
+    // 1. Internal Hysteresis Damper Sleeve
     if (Physics.params.c > 0) {
         const sleeveHeight = Math.max(8, Math.floor(length * 0.45));
         const sleeveWidth = Math.round(6 + (Physics.params.c / 15) * 10);
@@ -310,59 +360,196 @@ function drawTetherAndDamper(anchorY, payloadTopY) {
         );
     }
 
-    // 2. Procedural Coil Tether (coil count & wire thickness scale with k)
+    // 2. Bresenham Pixel Coil Tether
     const coils = Math.round(8 + (Physics.params.k / 100) * 12);
     const segment = length / coils;
-    const wireWidth = Physics.params.k >= 60 ? 2 : 1;
+    const wireThickness = Physics.params.k >= 60 ? 2 : 1;
 
-    ctx.strokeStyle = '#FFB000';
-    ctx.lineWidth = wireWidth;
-    ctx.beginPath();
-    ctx.moveTo(RIG_CENTER_X, anchorY);
+    let prevX = RIG_CENTER_X;
+    let prevY = anchorY;
 
     for (let i = 1; i < coils; i++) {
-        const xOffset = (i % 2 === 0) ? -9 : 9;
-        ctx.lineTo(RIG_CENTER_X + xOffset, Math.round(anchorY + i * segment));
+        const nextX = RIG_CENTER_X + ((i % 2 === 0) ? -9 : 9);
+        const nextY = Math.round(anchorY + i * segment);
+        drawPixelLine(prevX, prevY, nextX, nextY, '#FFB000', wireThickness);
+        prevX = nextX;
+        prevY = nextY;
     }
-    ctx.lineTo(RIG_CENTER_X, payloadTopY);
-    ctx.stroke();
+    drawPixelLine(prevX, prevY, RIG_CENTER_X, payloadTopY, '#FFB000', wireThickness);
 }
 
 function drawPayload() {
     const bounds = getPayloadBounds();
     const { x, y, size } = bounds;
 
-    // Solar Array Wings
     const wingY = y + Math.floor(size / 2) - 5;
     ctx.fillStyle = '#FFB000';
     ctx.fillRect(x - 30, wingY, 28, 10);
     ctx.fillRect(x + size + 2, wingY, 28, 10);
 
-    // Solar Cell Grid Lines
     ctx.fillStyle = '#000000';
     for (let offset = 7; offset < 28; offset += 7) {
         ctx.fillRect(x - 30 + offset, wingY, 1, 10);
         ctx.fillRect(x + size + 2 + offset, wingY, 1, 10);
     }
 
-    // Satellite Bus Body (scales with mass m)
     ctx.fillStyle = (Interaction.isDragging || Interaction.isHovering) ? '#FFFFFF' : '#00FFFF';
     ctx.fillRect(x, y, size, size);
 
-    // Inner core detail
     ctx.fillStyle = '#000000';
     ctx.fillRect(x + 3, y + 3, size - 6, size - 6);
     ctx.fillStyle = '#00FFFF';
     ctx.fillRect(x + 6, y + 6, size - 12, size - 12);
 }
 
-// --- 6. MAIN LOOP ---
+// --- 8. DIAGNOSTICS RENDERER (OSCILLOSCOPE & PHASE PORTRAIT) ---
+function drawOscilloscope(xEq) {
+    const BOX_X = 250;
+    const BOX_Y = 14;
+    const BOX_W = 220;
+    const BOX_H = 104;
+    const CENTER_Y = BOX_Y + Math.floor(BOX_H / 2);
+    const SCALE_Y = 8.0; // 8 pixels per meter (fits +/- 6.2m)
+
+    drawPixelBezel(BOX_X, BOX_Y, BOX_W, BOX_H, '#555555');
+
+    // Internal Grid Lines
+    ctx.fillStyle = '#222222';
+    for (let gx = BOX_X + 20; gx < BOX_X + BOX_W; gx += 20) {
+        ctx.fillRect(gx, BOX_Y + 1, 1, BOX_H - 2);
+    }
+    for (let gy = BOX_Y + 26; gy < BOX_Y + BOX_H; gy += 26) {
+        ctx.fillRect(BOX_X + 1, gy, BOX_W - 2, 1);
+    }
+
+    // Unextended x = 0 Axis (Dim Gray)
+    ctx.fillStyle = '#555555';
+    ctx.fillRect(BOX_X + 1, CENTER_Y, BOX_W - 2, 1);
+
+    // Static Equilibrium x_eq = mg/k Axis (Emerald Green dashed)
+    const eqPlotY = Math.max(
+        BOX_Y + 2,
+        Math.min(BOX_Y + BOX_H - 3, Math.round(CENTER_Y + xEq * SCALE_Y))
+    );
+    ctx.fillStyle = '#00FF66';
+    for (let gx = BOX_X + 2; gx < BOX_X + BOX_W - 2; gx += 6) {
+        ctx.fillRect(gx, eqPlotY, 3, 1);
+    }
+
+    // Plot Rolling Waveform x(t)
+    const count = Diagnostics.count;
+    if (count < 2) return;
+
+    const xOffset = BOX_X + (BOX_W - count);
+    let prevPlotX = xOffset;
+    let prevPlotY = Math.max(
+        BOX_Y + 1,
+        Math.min(BOX_Y + BOX_H - 2, Math.round(CENTER_Y + Diagnostics.getSample(0).x * SCALE_Y))
+    );
+
+    for (let i = 1; i < count; i++) {
+        const sample = Diagnostics.getSample(i);
+        const curPlotX = xOffset + i;
+        const curPlotY = Math.max(
+            BOX_Y + 1,
+            Math.min(BOX_Y + BOX_H - 2, Math.round(CENTER_Y + sample.x * SCALE_Y))
+        );
+        drawPixelLine(prevPlotX, prevPlotY, curPlotX, curPlotY, '#FFB000', 1);
+        prevPlotX = curPlotX;
+        prevPlotY = curPlotY;
+    }
+
+    // Live Trace Head Marker
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(prevPlotX - 1, prevPlotY - 1, 2, 2);
+}
+
+function drawPhasePortrait(xEq) {
+    const BOX_X = 250;
+    const BOX_Y = 132;
+    const BOX_W = 220;
+    const BOX_H = 128;
+    const ORIGIN_X = BOX_X + Math.floor(BOX_W / 2);
+    const ORIGIN_Y = BOX_Y + Math.floor(BOX_H / 2);
+
+    const SCALE_X = 16.0; // 16 px/m -> +/- 6.5m fits inside 220px width
+    const SCALE_V = 2.2;  // 2.2 px/(m/s) -> +/- 28 m/s fits inside 128px height
+
+    drawPixelBezel(BOX_X, BOX_Y, BOX_W, BOX_H, '#555555');
+
+    // Internal Grid
+    ctx.fillStyle = '#222222';
+    for (let gx = BOX_X + 20; gx < BOX_X + BOX_W; gx += 20) {
+        ctx.fillRect(gx, BOX_Y + 1, 1, BOX_H - 2);
+    }
+    for (let gy = BOX_Y + 21; gy < BOX_Y + BOX_H; gy += 21) {
+        ctx.fillRect(BOX_X + 1, gy, BOX_W - 2, 1);
+    }
+
+    // Coordinate Axes (x = 0, v = 0)
+    ctx.fillStyle = '#555555';
+    ctx.fillRect(BOX_X + 1, ORIGIN_Y, BOX_W - 2, 1);
+    ctx.fillRect(ORIGIN_X, BOX_Y + 1, 1, BOX_H - 2);
+
+    // Shifted Equilibrium Attractor Crosshair (x = x_eq, v = 0)
+    const eqPlotX = Math.max(
+        BOX_X + 3,
+        Math.min(BOX_X + BOX_W - 4, Math.round(ORIGIN_X + xEq * SCALE_X))
+    );
+    ctx.fillStyle = '#00FF66';
+    ctx.fillRect(eqPlotX - 3, ORIGIN_Y, 7, 1);
+    ctx.fillRect(eqPlotX, ORIGIN_Y - 3, 1, 7);
+
+    // Plot Phase Trajectory (x, v) with 3-tier indexed color decay
+    const count = Diagnostics.count;
+    if (count < 2) return;
+
+    function mapToPhaseBox(sample) {
+        const px = Math.round(ORIGIN_X + sample.x * SCALE_X);
+        const py = Math.round(ORIGIN_Y - sample.v * SCALE_V); // +v is upward
+        return {
+            x: Math.max(BOX_X + 1, Math.min(BOX_X + BOX_W - 2, px)),
+            y: Math.max(BOX_Y + 1, Math.min(BOX_Y + BOX_H - 2, py))
+        };
+    }
+
+    let prevPt = mapToPhaseBox(Diagnostics.getSample(0));
+
+    for (let i = 1; i < count; i++) {
+        const curPt = mapToPhaseBox(Diagnostics.getSample(i));
+        const ageRatio = i / count;
+
+        // Indexed color stepping (Zero alpha blending)
+        let segColor = '#222222';
+        if (ageRatio > 0.75) segColor = '#00FFFF';
+        else if (ageRatio > 0.35) segColor = '#555555';
+
+        drawPixelLine(prevPt.x, prevPt.y, curPt.x, curPt.y, segColor, 1);
+        prevPt = curPt;
+    }
+
+    // Current Phase State Cursor (3x3 Phosphor Amber Block)
+    ctx.fillStyle = '#FFB000';
+    ctx.fillRect(prevPt.x - 1, prevPt.y - 1, 3, 3);
+}
+
+function drawDiagnosticsLabels() {
+    ctx.font = 'bold 8px Courier New, monospace';
+    ctx.fillStyle = '#FFB000';
+    ctx.fillText('OSCILLOSCOPE: X(T) [M VS TIME]', 250, 10);
+    ctx.fillText('PHASE SPACE: V(X) [M/S VS M]', 250, 128);
+}
+
+// --- 9. MAIN LOOP ---
 const TIME_STEP = 1 / 60;
 
 function gameLoop() {
     if (!Interaction.isDragging) {
         Physics.stepRK4(TIME_STEP);
     }
+
+    // Record instantaneous state into O(1) circular buffers
+    Diagnostics.record(Physics.state.x, Physics.state.v);
 
     const metrics = Physics.getMetrics();
 
@@ -377,13 +564,18 @@ function gameLoop() {
     UI.energy.innerText = metrics.energy.toFixed(2);
     UI.time.innerText = Physics.state.t.toFixed(2);
 
-    // Render Frame
+    // Render Physical Stage (Left Bay)
     drawStage();
     drawEquilibriumMarkers(metrics.xEq);
     const anchorY = drawTrussAndActuator();
     const bounds = getPayloadBounds();
     drawTetherAndDamper(anchorY, bounds.y);
     drawPayload();
+
+    // Render Diagnostic Instruments (Right Bay)
+    drawDiagnosticsLabels();
+    drawOscilloscope(metrics.xEq);
+    drawPhasePortrait(metrics.xEq);
 
     requestAnimationFrame(gameLoop);
 }
