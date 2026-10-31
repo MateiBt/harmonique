@@ -1,0 +1,120 @@
+:root {
+    --space-black: #000000;
+    --panel-dark: #0a0a0a;
+    --phosphor-amber: #FFB000;
+    --truss-gray: #555555;
+    --grid-dim: #222222;
+    --payload-cyan: #00FFFF;
+    --alert-red: #FF0044;
+    --eq-green: #00FF66;
+}
+
+* {
+    box-sizing: border-box;
+    user-select: none;
+}
+
+body {
+    margin: 0;
+    padding: 15px 0;
+    background-color: var(--space-black);
+    color: var(--phosphor-amber);
+    font-family: 'Courier New', Courier, monospace;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+}
+
+canvas {
+    background-color: var(--space-black);
+    image-rendering: -moz-crisp-edges;
+    image-rendering: -webkit-crisp-edges;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    width: 960px;
+    height: 540px;
+    border: 2px solid var(--phosphor-amber);
+    display: block;
+}
+
+#telemetry-bar {
+    width: 960px;
+    margin-top: 8px;
+    padding: 8px 12px;
+    background-color: var(--panel-dark);
+    border: 2px solid var(--truss-gray);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.95rem;
+    font-weight: bold;
+    text-transform: uppercase;
+}
+
+.telemetry-item span {
+    color: var(--payload-cyan);
+}
+
+.telemetry-item .warning {
+    color: var(--alert-red);
+}
+
+#controls-matrix {
+    width: 960px;
+    margin-top: 8px;
+    padding: 12px;
+    background-color: var(--panel-dark);
+    border: 2px solid var(--truss-gray);
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px 20px;
+}
+
+.slider-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.slider-header {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.85rem;
+    font-weight: bold;
+}
+
+.slider-val {
+    color: var(--payload-cyan);
+}
+
+/* Flat pixelated range inputs */
+input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 8px;
+    background: var(--grid-dim);
+    border: 1px solid var(--truss-gray);
+    outline: none;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 12px;
+    height: 16px;
+    background: var(--phosphor-amber);
+    border: 1px solid var(--space-black);
+    cursor: pointer;
+}
+
+input[type="range"]::-moz-range-thumb {
+    width: 12px;
+    height: 16px;
+    background: var(--phosphor-amber);
+    border: 1px solid var(--space-black);
+    border-radius: 0;
+    cursor: pointer;
+}
