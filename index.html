@@ -10,22 +10,47 @@
 
     <canvas id="stage" width="480" height="270"></canvas>
 
-    <!-- Live Analytical Readout Bar -->
+    <div id="formula-bar">
+        <div class="formula-item">SOLUTION: <span id="formula-readout">x(t) = A·exp(-ζω₀t)·cos(ω_d·t - φ) + x_eq</span></div>
+        <div class="formula-item">ω_d: <span id="wd-readout">0.00</span> rad/s</div>
+        <div class="formula-item">PHASE LAG (δ): <span id="delta-readout">0.0°</span></div>
+    </div>
+
     <div id="telemetry-bar">
         <div class="telemetry-item">REGIME: <span id="regime-readout">INIT</span></div>
         <div class="telemetry-item">ω₀: <span id="w0-readout">0.00</span> rad/s</div>
         <div class="telemetry-item">ζ: <span id="zeta-readout">0.00</span></div>
         <div class="telemetry-item">X_EQ: <span id="xeq-readout">0.00</span> m</div>
-        <div class="telemetry-item">E_TOT: <span id="energy-readout">0.00</span> J</div>
+        <div class="telemetry-item">E_MECH: <span id="energy-readout">0.00</span> J</div>
         <div class="telemetry-item">T: <span id="time-readout">0.00</span> s</div>
     </div>
 
-    <!-- 6-Parameter Control Matrix -->
+    <div id="energy-ledger">
+        <div class="ledger-item"><span class="swatch swatch-t"></span>T (KIN): <span id="e-kin-readout">0.00</span> J</div>
+        <div class="ledger-item"><span class="swatch swatch-u"></span>U_EFF: <span id="e-ueff-readout">0.00</span> J</div>
+        <div class="ledger-item">U_S (ELAST): <span id="e-us-readout">0.00</span> J</div>
+        <div class="ledger-item">U_G (GRAV): <span id="e-ug-readout">0.00</span> J</div>
+        <div class="ledger-item"><span class="swatch swatch-q"></span>Q_LOSS: <span id="e-qloss-readout">0.00</span> J</div>
+        <div class="ledger-item">W_DRIVE: <span id="e-wdrive-readout">0.00</span> J</div>
+    </div>
+
+    <div id="preset-bar">
+        <button class="retro-btn" id="btn-undamped">[1] UNDAMPED</button>
+        <button class="retro-btn" id="btn-underdamped">[2] UNDERDAMPED</button>
+        <button class="retro-btn" id="btn-critical">[3] CRITICAL (ζ=1)</button>
+        <button class="retro-btn" id="btn-overdamped">[4] OVERDAMPED</button>
+        <button class="retro-btn btn-danger" id="btn-resonance">[5] RESONANCE (ω=ω₀)</button>
+        <button class="retro-btn btn-action" id="btn-impulse">[I] IMPULSE</button>
+        <button class="retro-btn btn-action" id="btn-pause">[SPACE] PAUSE</button>
+        <button class="retro-btn btn-action" id="btn-reset">[R] RESET</button>
+        <button class="retro-btn btn-audio" id="btn-audio">[M] AUDIO: OFF</button>
+    </div>
+
     <div id="controls-matrix">
         <div class="slider-cell">
             <div class="slider-header">
                 <label for="slider-m">MASS (m)</label>
-                <span class="slider-val" id="val-m">2.0 kg</span>
+                <span class="slider-val" id="val-m">2.00 kg</span>
             </div>
             <input type="range" id="slider-m" min="0.5" max="10.0" step="0.1" value="2.0">
         </div>
@@ -41,9 +66,9 @@
         <div class="slider-cell">
             <div class="slider-header">
                 <label for="slider-c">HYSTERESIS DAMPING (c)</label>
-                <span class="slider-val" id="val-c">1.5 N·s/m</span>
+                <span class="slider-val" id="val-c">1.50 N·s/m</span>
             </div>
-            <input type="range" id="slider-c" min="0.0" max="15.0" step="0.1" value="1.5">
+            <input type="range" id="slider-c" min="0.0" max="30.0" step="0.01" value="1.5">
         </div>
 
         <div class="slider-cell">
@@ -57,9 +82,9 @@
         <div class="slider-cell">
             <div class="slider-header">
                 <label for="slider-w">DRIVE FREQ (ω)</label>
-                <span class="slider-val" id="val-w">3.5 rad/s</span>
+                <span class="slider-val" id="val-w">3.50 rad/s</span>
             </div>
-            <input type="range" id="slider-w" min="0.5" max="12.0" step="0.1" value="3.5">
+            <input type="range" id="slider-w" min="0.5" max="12.0" step="0.01" value="3.5">
         </div>
 
         <div class="slider-cell">
