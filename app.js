@@ -7,11 +7,23 @@ for (let i = 0; i < STAR_COUNT; i++) {
     });
 }
 
+const BUBBLE_COUNT = 18;
+const bubbles = [];
+for (let i = 0; i < BUBBLE_COUNT; i++) {
+    bubbles.push({
+        x: 24 + Math.floor(Math.random() * 168),
+        y: 135 + Math.floor(Math.random() * 120),
+        speed: 0.3 + Math.random() * 0.6
+    });
+}
+
 const PIXELS_PER_METER = 20;
 const RIG_CENTER_X = 108;
 const UNEXTENDED_Y = 125;
 const MIN_X_METERS = -4.2;
 const MAX_X_METERS = 5.8;
+const SPHERE_RADIUS_M = 3.2;
+const MAGLEV_BETA = 0.025;
 
 const SoundEngine = {
     ctx: null,
@@ -43,7 +55,7 @@ const SoundEngine = {
         osc.type = 'square';
         osc.frequency.setValueAtTime(pitch, now);
 
-        gain.gain.setValueAtTime(0.06, now);
+        gain.gain.setValueAtTime(0.05, now);
         gain.gain.exponentialRampToValueAtTime(0.001, now + 0.018);
 
         osc.connect(gain);
@@ -62,7 +74,7 @@ const SoundEngine = {
         osc.frequency.setValueAtTime(130, now);
         osc.frequency.exponentialRampToValueAtTime(42, now + 0.065);
 
-        const vol = Math.min(0.18, Math.max(0.03, impactSpeed * 0.015));
+        const vol = Math.min(0.16, Math.max(0.03, impactSpeed * 0.015));
         gain.gain.setValueAtTime(vol, now);
         gain.gain.exponentialRampToValueAtTime(0.001, now + 0.07);
 
@@ -82,7 +94,7 @@ const SoundEngine = {
         osc.frequency.setValueAtTime(220, now);
         osc.frequency.exponentialRampToValueAtTime(660, now + 0.045);
 
-        gain.gain.setValueAtTime(0.12, now);
+        gain.gain.setValueAtTime(0.11, now);
         gain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
 
         osc.connect(gain);
@@ -93,6 +105,7 @@ const SoundEngine = {
 };
 
 const Physics = {
+    mode: 'tether',
     isPaused: false,
 
     params: {
@@ -118,8 +131,43 @@ const Physics = {
         this.state.wDrive = 0.0;
     },
 
+    getEquilibriumX: function() {
+        const { m, k, g } = this.params;
+        if (this.mode === 'buoyancy') {
+            return 0.0;
+        }
+        return (m * g) / k;
+    },
+
+    getRestoringForceAndPotential: function(x) {
+        const { m, k, g } = this.params;
+        const xEq = this.getEquilibriumX();
+        const u = x - xEq;
+
+        if (this.mode === 'buoyancy') {
+            const R = SPHERE_RADIUS_M;
+            const uc = Math.max(-R, Math.min(R, u));
+            const fRestore = -k * uc * (1.0 - (uc * uc) / (3.0 * R * R));
+            const uEff = 0.5 * k * (uc * uc) * (1.0 - (uc * uc) / (6.0 * R * R)) +
+                (Math.abs(u) > R ? (2.0 / 3.0) * k * R * (Math.abs(u) - R) : 0.0);
+            return { fTotal: fRestore, uEff: uEff, usRaw: uEff, ugRaw: -m * g * x };
+        }
+
+        if (this.mode === 'maglev') {
+            const fSpring = -k * x * (1.0 + MAGLEV_BETA * x * x) + m * g;
+            const uEff = 0.5 * k * (u * u) * (1.0 + 0.5 * MAGLEV_BETA * u * u);
+            const usRaw = 0.5 * k * (x * x) * (1.0 + 0.5 * MAGLEV_BETA * x * x);
+            return { fTotal: fSpring, uEff: uEff, usRaw: usRaw, ugRaw: -m * g * x };
+        }
+
+        const fLinear = -k * x + m * g;
+        const uEff = 0.5 * k * (u * u);
+        const usRaw = 0.5 * k * (x * x);
+        return { fTotal: fLinear, uEff: uEff, usRaw: usRaw, ugRaw: -m * g * x };
+    },
+
     resetState: function(initialOffset = 2.0) {
-        const xEq = (this.params.m * this.params.g) / this.params.k;
+        const xEq = this.getEquilibriumX();
         this.state.x = Math.max(MIN_X_METERS, Math.min(MAX_X_METERS, xEq + initialOffset));
         this.state.v = 0.0;
         this.state.phi = 0.0;
@@ -128,18 +176,19 @@ const Physics = {
     },
 
     getDerivatives: function(x, v, phi) {
-        const { m, k, c, F0, g } = this.params;
+        const { m, c, F0 } = this.params;
         const fDrive = F0 * Math.cos(phi);
-        const a = (-k * x - c * v + fDrive + m * g) / m;
-        const dQ = c * (v ** 2);
+        const { fTotal } = this.getRestoringForceAndPotential(x);
+        const a = (fTotal - c * v + fDrive) / m;
+        const dQ = c * (v * v);
         const dW = fDrive * v;
         return { dx: v, dv: a, dQ: dQ, dW: dW };
     },
 
     stepRK4: function(dt) {
         const { x, v, phi } = this.state;
-        const { m, k, g, w } = this.params;
-        const xEq = (m * g) / k;
+        const { m, w } = this.params;
+        const xEq = this.getEquilibriumX();
         const prevRelX = x - xEq;
 
         const k1 = this.getDerivatives(x, v, phi);
@@ -180,7 +229,7 @@ const Physics = {
             if (this.state.v < 0) {
                 const vPre = this.state.v;
                 const vPost = -0.25 * vPre;
-                this.state.qLoss += 0.5 * m * (vPre ** 2 - vPost ** 2);
+                this.state.qLoss += 0.5 * m * (vPre * vPre - vPost * vPost);
                 this.state.v = vPost;
                 SoundEngine.playStopImpact(Math.abs(vPre));
             }
@@ -189,7 +238,7 @@ const Physics = {
             if (this.state.v > 0) {
                 const vPre = this.state.v;
                 const vPost = -0.25 * vPre;
-                this.state.qLoss += 0.5 * m * (vPre ** 2 - vPost ** 2);
+                this.state.qLoss += 0.5 * m * (vPre * vPre - vPost * vPost);
                 this.state.v = vPost;
                 SoundEngine.playStopImpact(Math.abs(vPre));
             }
@@ -197,13 +246,14 @@ const Physics = {
     },
 
     getMetrics: function() {
-        const { m, k, c, F0, w, g } = this.params;
+        const { m, k, c, F0, w } = this.params;
         const { x, v, qLoss, wDrive } = this.state;
 
         const w0 = Math.sqrt(k / m);
         const zeta = c / (2 * Math.sqrt(k * m));
-        const xEq = (m * g) / k;
+        const xEq = this.getEquilibriumX();
         const wd = zeta < 1.0 ? w0 * Math.sqrt(1.0 - zeta * zeta) : 0.0;
+        const qFactor = zeta > 1e-4 ? (1.0 / (2.0 * zeta)).toFixed(2) : '&infin;';
 
         let regime = "UNDAMPED";
         if (zeta > 0 && zeta < 0.995) regime = "UNDERDAMPED";
@@ -215,28 +265,33 @@ const Physics = {
         const phaseLagRad = Math.atan2(2.0 * zeta * (w / w0), 1.0 - (w / w0) ** 2);
         const phaseLagDeg = (phaseLagRad * 180.0) / Math.PI;
 
-        let formula = "x(t) = A·cos(ω₀t - φ) + x_eq";
-        if (F0 > 0) {
-            formula = "x_p(t) = [F₀ / √((k-mω²)² + (cω)²)]·cos(ωt - δ) + x_eq";
-        } else if (regime === "UNDERDAMPED") {
-            formula = "x(t) = A·exp(-ζω₀t)·cos(ω_d·t - φ) + x_eq";
-        } else if (regime === "CRITICAL") {
-            formula = "x(t) = (C₁ + C₂·t)·exp(-ω₀t) + x_eq";
-        } else if (regime === "OVERDAMPED") {
-            formula = "x(t) = C₁·exp(r₁t) + C₂·exp(r₂t) + x_eq";
+        let odeHTML = "<i>m</i><i>x&#776;</i> + <i>c</i><i>x&#775;</i> + <i>k</i><i>x</i> = <i>F</i><sub>0</sub> cos(<i>&omega;t</i>) + <i>mg</i>";
+        if (this.mode === 'buoyancy') {
+            odeHTML = "<i>m</i><sub>eff</sub><i>x&#776;</i> + <i>c</i><sub>visc</sub><i>x&#775;</i> + <i>&rho;</i><sub>f</sub><i>g&pi;</i>(<i>R</i><sup>2</sup><i>x</i> &minus; <sup>1</sup>&frasl;<sub>3</sub><i>x</i><sup>3</sup>) = <i>F</i><sub>0</sub> cos(<i>&omega;t</i>)";
+        } else if (this.mode === 'maglev') {
+            odeHTML = "<i>m</i><i>x&#776;</i> + <i>c</i><sub>eddy</sub><i>x&#775;</i> + <i>k</i><sub>mag</sub><i>x</i>(1 + <i>&beta;x</i><sup>2</sup>) = <i>F</i><sub>0</sub> cos(<i>&omega;t</i>) + <i>mg</i>";
         }
 
-        const T = 0.5 * m * (v ** 2);
-        const Us = 0.5 * k * (x ** 2);
-        const Ug = -m * g * x;
-        const Ueff = 0.5 * k * ((x - xEq) ** 2);
-        const Emech = T + Ueff;
-        const Eclosed = T + Ueff + qLoss;
+        let formulaHTML = "<i>x</i>(<i>t</i>) = <i>A</i> cos(<i>&omega;</i><sub>0</sub><i>t</i> &minus; <i>&phi;</i>) + <i>x</i><sub>eq</sub>";
+        if (F0 > 0) {
+            formulaHTML = "<i>x</i><sub>p</sub>(<i>t</i>) = [<i>F</i><sub>0</sub> / &radic;((<i>k</i>&minus;<i>m&omega;</i><sup>2</sup>)<sup>2</sup> + (<i>c&omega;</i>)<sup>2</sup>)] cos(<i>&omega;t</i> &minus; <i>&delta;</i>) + <i>x</i><sub>eq</sub>";
+        } else if (regime === "UNDERDAMPED") {
+            formulaHTML = "<i>x</i>(<i>t</i>) = <i>A</i> e<sup>&minus;<i>&zeta;&omega;</i><sub>0</sub><i>t</i></sup> cos(<i>&omega;</i><sub>d</sub><i>t</i> &minus; <i>&phi;</i>) + <i>x</i><sub>eq</sub>";
+        } else if (regime === "CRITICAL") {
+            formulaHTML = "<i>x</i>(<i>t</i>) = (<i>C</i><sub>1</sub> + <i>C</i><sub>2</sub><i>t</i>) e<sup>&minus;<i>&omega;</i><sub>0</sub><i>t</i></sup> + <i>x</i><sub>eq</sub>";
+        } else if (regime === "OVERDAMPED") {
+            formulaHTML = "<i>x</i>(<i>t</i>) = <i>C</i><sub>1</sub> e<sup><i>r</i><sub>1</sub><i>t</i></sup> + <i>C</i><sub>2</sub> e<sup><i>r</i><sub>2</sub><i>t</i></sup> + <i>x</i><sub>eq</sub>";
+        }
+
+        const T = 0.5 * m * (v * v);
+        const { uEff, usRaw, ugRaw } = this.getRestoringForceAndPotential(x);
+        const Emech = T + uEff;
+        const Eclosed = T + uEff + qLoss;
 
         return {
-            w0, wd, zeta, xEq, regime, isResonant,
-            phaseLagDeg, formula,
-            T, Us, Ug, Ueff, qLoss, wDrive, Emech, Eclosed
+            w0, wd, zeta, qFactor, xEq, regime, isResonant,
+            phaseLagDeg, odeHTML, formulaHTML,
+            T, Us: usRaw, Ug: ugRaw, Ueff: uEff, qLoss, wDrive, Emech, Eclosed
         };
     }
 };
@@ -275,9 +330,18 @@ const canvas = document.getElementById('stage');
 const ctx = canvas.getContext('2d');
 
 const UI = {
+    modeSubtitle: document.getElementById('mode-subtitle'),
+    hudRigTitle: document.getElementById('hud-rig-title'),
+    hudPauseBadge: document.getElementById('hud-pause-badge'),
+    hudScopeEq: document.getElementById('hud-scope-eq'),
+    lblM: document.getElementById('lbl-m'),
+    lblK: document.getElementById('lbl-k'),
+    lblC: document.getElementById('lbl-c'),
+    ode: document.getElementById('ode-readout'),
     formula: document.getElementById('formula-readout'),
     wd: document.getElementById('wd-readout'),
     delta: document.getElementById('delta-readout'),
+    qFactor: document.getElementById('qfactor-readout'),
     regime: document.getElementById('regime-readout'),
     w0: document.getElementById('w0-readout'),
     zeta: document.getElementById('zeta-readout'),
@@ -326,37 +390,72 @@ for (const cfg of sliderConfigs) {
     });
 }
 
+function switchApparatus(mode) {
+    Physics.mode = mode;
+    document.querySelectorAll('.mode-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.mode === mode);
+    });
+
+    if (mode === 'tether') {
+        UI.modeSubtitle.innerText = 'ORBITAL TETHER PAYLOAD';
+        UI.hudRigTitle.innerText = 'RIG: LINEAR ELASTIC TETHER';
+        UI.lblM.innerText = 'PAYLOAD MASS';
+        UI.lblK.innerText = 'TETHER STIFFNESS';
+        UI.lblC.innerText = 'HYSTERESIS DAMPING';
+        Physics.params.g = 0.0;
+    } else if (mode === 'buoyancy') {
+        UI.modeSubtitle.innerText = 'HYDROSTATIC BUOYANCY SPHERE';
+        UI.hudRigTitle.innerText = 'RIG: ARCHIMEDES FLUID TANK';
+        UI.lblM.innerText = 'EFF. BUOY MASS';
+        UI.lblK.innerText = 'BUOYANCY STIFFNESS';
+        UI.lblC.innerText = 'VISCOUS FLUID DRAG';
+        if (Physics.params.g < 1.0) Physics.params.g = 9.8;
+    } else if (mode === 'maglev') {
+        UI.modeSubtitle.innerText = 'HELMHOLTZ MAGLEV TRAP';
+        UI.hudRigTitle.innerText = 'RIG: MAGNETIC FLUX CAVITY';
+        UI.lblM.innerText = 'CORE MASS';
+        UI.lblK.innerText = 'MAGNETIC STIFFNESS';
+        UI.lblC.innerText = 'EDDY-CURRENT DRAG';
+        Physics.params.g = 0.0;
+    }
+
+    Physics.resetState(2.2);
+    syncSlidersFromParams();
+    Diagnostics.clear();
+}
+
+document.getElementById('mode-tether').addEventListener('click', () => switchApparatus('tether'));
+document.getElementById('mode-buoyancy').addEventListener('click', () => switchApparatus('buoyancy'));
+document.getElementById('mode-maglev').addEventListener('click', () => switchApparatus('maglev'));
+
 function applyPreset(presetName) {
     Physics.isPaused = false;
     UI.btnPause.innerText = '[SPACE] PAUSE';
+    UI.hudPauseBadge.classList.add('hidden');
 
     if (presetName === 'undamped') {
         Physics.params.m = 2.0;
         Physics.params.k = 25.0;
         Physics.params.c = 0.0;
         Physics.params.F0 = 0.0;
-        Physics.params.g = 0.0;
         Physics.resetState(2.5);
     } else if (presetName === 'underdamped') {
         Physics.params.m = 2.0;
         Physics.params.k = 25.0;
         Physics.params.c = 1.5;
         Physics.params.F0 = 0.0;
-        Physics.params.g = 0.0;
         Physics.resetState(2.8);
     } else if (presetName === 'critical') {
         Physics.params.m = 2.0;
         Physics.params.k = 25.0;
         Physics.params.c = 2.0 * Math.sqrt(Physics.params.k * Physics.params.m);
         Physics.params.F0 = 0.0;
-        Physics.params.g = 0.0;
         Physics.resetState(3.2);
     } else if (presetName === 'overdamped') {
         Physics.params.m = 3.0;
         Physics.params.k = 20.0;
         Physics.params.c = 26.0;
         Physics.params.F0 = 0.0;
-        Physics.params.g = 0.0;
         Physics.resetState(3.2);
     } else if (presetName === 'resonance') {
         Physics.params.m = 2.0;
@@ -364,7 +463,6 @@ function applyPreset(presetName) {
         Physics.params.c = 0.45;
         Physics.params.F0 = 8.0;
         Physics.params.w = Math.sqrt(Physics.params.k / Physics.params.m);
-        Physics.params.g = 0.0;
         Physics.resetState(0.0);
     }
 
@@ -381,6 +479,7 @@ function triggerImpulse() {
 function togglePause() {
     Physics.isPaused = !Physics.isPaused;
     UI.btnPause.innerText = Physics.isPaused ? '[SPACE] RESUME' : '[SPACE] PAUSE';
+    UI.hudPauseBadge.classList.toggle('hidden', !Physics.isPaused);
 }
 
 function resetSimulation() {
@@ -444,10 +543,12 @@ function getCanvasMousePos(event) {
 
 function getPayloadBounds() {
     const payloadY = Math.round(UNEXTENDED_Y + Physics.state.x * PIXELS_PER_METER);
-    const size = Math.round(20 + Physics.params.m * 1.8);
+    const size = Math.round(22 + Physics.params.m * 1.8);
     return {
         x: RIG_CENTER_X - Math.floor(size / 2),
         y: payloadY - Math.floor(size / 2),
+        centerY: payloadY,
+        radius: Math.floor(size / 2),
         size: size
     };
 }
@@ -459,8 +560,8 @@ canvas.addEventListener('mousedown', (e) => {
     if (
         pos.x >= bounds.x - 32 &&
         pos.x <= bounds.x + bounds.size + 32 &&
-        pos.y >= bounds.y - 6 &&
-        pos.y <= bounds.y + bounds.size + 6
+        pos.y >= bounds.y - 8 &&
+        pos.y <= bounds.y + bounds.size + 8
     ) {
         Interaction.isDragging = true;
         Interaction.dragHistory = [{ y: Physics.state.x, t: performance.now() }];
@@ -476,8 +577,8 @@ canvas.addEventListener('mousemove', (e) => {
     Interaction.isHovering = (
         pos.x >= bounds.x - 32 &&
         pos.x <= bounds.x + bounds.size + 32 &&
-        pos.y >= bounds.y - 6 &&
-        pos.y <= bounds.y + bounds.size + 6
+        pos.y >= bounds.y - 8 &&
+        pos.y <= bounds.y + bounds.size + 8
     );
     canvas.style.cursor = Interaction.isDragging
         ? 'grabbing'
@@ -550,6 +651,30 @@ function drawPixelLine(x0, y0, x1, y1, color, thickness = 1) {
     }
 }
 
+function drawPixelCircle(cx, cy, r, fillColor, strokeColor, highlightColor) {
+    cx = Math.round(cx);
+    cy = Math.round(cy);
+    r = Math.round(r);
+
+    for (let dy = -r; dy <= r; dy++) {
+        const dxLimit = Math.floor(Math.sqrt(r * r - dy * dy));
+        ctx.fillStyle = fillColor;
+        ctx.fillRect(cx - dxLimit, cy + dy, dxLimit * 2 + 1, 1);
+
+        if (strokeColor) {
+            ctx.fillStyle = strokeColor;
+            ctx.fillRect(cx - dxLimit, cy + dy, 2, 1);
+            ctx.fillRect(cx + dxLimit - 1, cy + dy, 2, 1);
+        }
+    }
+
+    if (highlightColor && r >= 8) {
+        ctx.fillStyle = highlightColor;
+        ctx.fillRect(cx - Math.floor(r * 0.45), cy - Math.floor(r * 0.45), 3, 3);
+        ctx.fillRect(cx - Math.floor(r * 0.25), cy - Math.floor(r * 0.55), 2, 2);
+    }
+}
+
 function drawPixelBezel(x, y, w, h, borderColor) {
     ctx.fillStyle = '#050505';
     ctx.fillRect(x, y, w, h);
@@ -560,34 +685,36 @@ function drawPixelBezel(x, y, w, h, borderColor) {
     ctx.fillRect(x + w - 1, y, 1, h);
 }
 
-function drawStage() {
+function drawBaseStage() {
     ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    for (let i = 0; i < STAR_COUNT; i++) {
-        ctx.fillStyle = i % 3 === 0 ? '#555555' : '#FFFFFF';
-        ctx.fillRect(stars[i].x, stars[i].y, 1, 1);
-    }
 
     ctx.fillStyle = '#555555';
     ctx.fillRect(215, 0, 2, canvas.height);
 }
 
 function drawEquilibriumMarkers(xEq) {
-    ctx.fillStyle = '#555555';
-    for (let x = 12; x < 204; x += 8) {
+    ctx.fillStyle = '#444444';
+    for (let x = 14; x < 202; x += 8) {
         ctx.fillRect(x, UNEXTENDED_Y, 4, 1);
     }
 
     const eqY = Math.round(UNEXTENDED_Y + xEq * PIXELS_PER_METER);
     const clampedEqY = Math.max(25, Math.min(265, eqY));
     ctx.fillStyle = '#00FF66';
-    for (let x = 12; x < 204; x += 6) {
+    for (let x = 14; x < 202; x += 6) {
         ctx.fillRect(x, clampedEqY, 3, 1);
     }
 }
 
-function drawTrussAndActuator() {
+function drawTetherApparatus(xEq) {
+    for (let i = 0; i < STAR_COUNT; i++) {
+        ctx.fillStyle = i % 3 === 0 ? '#555555' : '#FFFFFF';
+        ctx.fillRect(stars[i].x, stars[i].y, 1, 1);
+    }
+
+    drawEquilibriumMarkers(xEq);
+
     ctx.fillStyle = '#555555';
     ctx.fillRect(RIG_CENTER_X - 55, 0, 110, 18);
     ctx.fillStyle = '#000000';
@@ -603,53 +730,47 @@ function drawTrussAndActuator() {
     ctx.fillStyle = Physics.params.F0 > 0 ? '#FF0044' : '#FFB000';
     ctx.fillRect(RIG_CENTER_X - 10, anchorY - 4, 20, 6);
 
-    return anchorY + 2;
-}
-
-function drawTetherAndDamper(anchorY, payloadTopY) {
-    const length = payloadTopY - anchorY;
-    if (length <= 2) return;
-
-    if (Physics.params.c > 0) {
-        const sleeveHeight = Math.max(8, Math.floor(length * 0.45));
-        const sleeveWidth = Math.round(6 + (Physics.params.c / 30) * 12);
-        ctx.fillStyle = '#222222';
-        ctx.fillRect(
-            RIG_CENTER_X - Math.floor(sleeveWidth / 2),
-            anchorY,
-            sleeveWidth,
-            sleeveHeight
-        );
-        ctx.fillStyle = '#555555';
-        ctx.fillRect(
-            RIG_CENTER_X - Math.floor(sleeveWidth / 2),
-            anchorY + sleeveHeight - 2,
-            sleeveWidth,
-            2
-        );
-    }
-
-    const coils = Math.round(8 + (Physics.params.k / 100) * 12);
-    const segment = length / coils;
-    const wireThickness = Physics.params.k >= 60 ? 2 : 1;
-
-    let prevX = RIG_CENTER_X;
-    let prevY = anchorY;
-
-    for (let i = 1; i < coils; i++) {
-        const nextX = RIG_CENTER_X + ((i % 2 === 0) ? -9 : 9);
-        const nextY = Math.round(anchorY + i * segment);
-        drawPixelLine(prevX, prevY, nextX, nextY, '#FFB000', wireThickness);
-        prevX = nextX;
-        prevY = nextY;
-    }
-    drawPixelLine(prevX, prevY, RIG_CENTER_X, payloadTopY, '#FFB000', wireThickness);
-}
-
-function drawPayload() {
     const bounds = getPayloadBounds();
-    const { x, y, size } = bounds;
+    const length = bounds.y - (anchorY + 2);
 
+    if (length > 2) {
+        if (Physics.params.c > 0) {
+            const sleeveHeight = Math.max(8, Math.floor(length * 0.45));
+            const sleeveWidth = Math.round(6 + (Physics.params.c / 30) * 12);
+            ctx.fillStyle = '#222222';
+            ctx.fillRect(
+                RIG_CENTER_X - Math.floor(sleeveWidth / 2),
+                anchorY + 2,
+                sleeveWidth,
+                sleeveHeight
+            );
+            ctx.fillStyle = '#555555';
+            ctx.fillRect(
+                RIG_CENTER_X - Math.floor(sleeveWidth / 2),
+                anchorY + sleeveHeight,
+                sleeveWidth,
+                2
+            );
+        }
+
+        const coils = Math.round(8 + (Physics.params.k / 100) * 12);
+        const segment = length / coils;
+        const wireThickness = Physics.params.k >= 60 ? 2 : 1;
+
+        let prevX = RIG_CENTER_X;
+        let prevY = anchorY + 2;
+
+        for (let i = 1; i < coils; i++) {
+            const nextX = RIG_CENTER_X + ((i % 2 === 0) ? -9 : 9);
+            const nextY = Math.round(anchorY + 2 + i * segment);
+            drawPixelLine(prevX, prevY, nextX, nextY, '#FFB000', wireThickness);
+            prevX = nextX;
+            prevY = nextY;
+        }
+        drawPixelLine(prevX, prevY, RIG_CENTER_X, bounds.y, '#FFB000', wireThickness);
+    }
+
+    const { x, y, size } = bounds;
     const wingY = y + Math.floor(size / 2) - 5;
     ctx.fillStyle = '#FFB000';
     ctx.fillRect(x - 28, wingY, 26, 10);
@@ -668,6 +789,124 @@ function drawPayload() {
     ctx.fillRect(x + 3, y + 3, size - 6, size - 6);
     ctx.fillStyle = '#00FFFF';
     ctx.fillRect(x + 6, y + 6, size - 12, size - 12);
+}
+
+function drawBuoyancyApparatus(xEq) {
+    const tankLeft = 16;
+    const tankRight = 200;
+    const tankTop = 22;
+    const tankBottom = 258;
+    const waterY = UNEXTENDED_Y;
+
+    ctx.fillStyle = '#081826';
+    ctx.fillRect(tankLeft, waterY, tankRight - tankLeft, tankBottom - waterY);
+
+    ctx.fillStyle = '#0e2a42';
+    for (let y = waterY + 6; y < tankBottom; y += 10) {
+        for (let x = tankLeft + 4 + (y % 4); x < tankRight - 4; x += 12) {
+            ctx.fillRect(x, y, 4, 1);
+        }
+    }
+
+    ctx.fillStyle = '#00FFFF';
+    for (let i = 0; i < BUBBLE_COUNT; i++) {
+        const b = bubbles[i];
+        if (!Physics.isPaused) {
+            b.y -= b.speed + Math.abs(Physics.state.v) * 0.08;
+            if (b.y <= waterY + 4) {
+                b.y = tankBottom - 6;
+                b.x = tankLeft + 10 + Math.floor(Math.random() * (tankRight - tankLeft - 20));
+            }
+        }
+        ctx.fillRect(Math.round(b.x), Math.round(b.y), 2, 2);
+    }
+
+    const bounds = getPayloadBounds();
+    const isActiveSelect = Interaction.isDragging || Interaction.isHovering;
+    drawPixelCircle(
+        RIG_CENTER_X,
+        bounds.centerY,
+        bounds.radius,
+        isActiveSelect ? '#FFFFFF' : '#FFB000',
+        '#00FFFF',
+        '#FFFFFF'
+    );
+
+    ctx.fillStyle = '#FF0044';
+    ctx.fillRect(
+        RIG_CENTER_X - bounds.radius + 2,
+        bounds.centerY - 1,
+        bounds.radius * 2 - 4,
+        3
+    );
+
+    const waveAmp = Physics.params.F0 > 0 ? (Physics.params.F0 / 30) * 5.0 : 1.0;
+    const splashAmp = Math.min(4.0, Math.abs(Physics.state.v) * 0.35);
+    let prevWX = tankLeft;
+    let prevWY = waterY;
+
+    for (let x = tankLeft; x <= tankRight; x += 4) {
+        const distFromCenter = Math.abs(x - RIG_CENTER_X);
+        const localRipple = Math.exp(-distFromCenter * 0.03) * splashAmp * Math.sin(distFromCenter * 0.25 - Physics.state.t * 8.0);
+        const driveWave = waveAmp * Math.sin((x - tankLeft) * 0.09 - Physics.state.phi);
+        const wy = Math.round(waterY + driveWave + localRipple);
+        drawPixelLine(prevWX, prevWY, x, wy, '#00FFFF', 2);
+        prevWX = x;
+        prevWY = wy;
+    }
+
+    drawEquilibriumMarkers(xEq);
+
+    ctx.fillStyle = '#555555';
+    ctx.fillRect(tankLeft - 3, tankTop, 3, tankBottom - tankTop + 3);
+    ctx.fillRect(tankRight, tankTop, 3, tankBottom - tankTop + 3);
+    ctx.fillRect(tankLeft - 3, tankBottom, tankRight - tankLeft + 6, 3);
+
+    for (let y = tankTop + 10; y < tankBottom; y += 20) {
+        ctx.fillRect(tankLeft, y, 4, 1);
+        ctx.fillRect(tankRight - 4, y, 4, 1);
+    }
+}
+
+function drawMaglevApparatus(xEq) {
+    const bounds = getPayloadBounds();
+    const topCoilY = 16;
+    const botCoilY = 236;
+
+    for (let mLine = -3; mLine <= 3; mLine++) {
+        if (mLine === 0) continue;
+        const spread = mLine * 14;
+        const midDeflect = spread * (1.25 - (bounds.centerY - UNEXTENDED_Y) * 0.004);
+        const fluxColor = Physics.params.F0 > 0 ? '#FF0044' : '#222222';
+        drawPixelLine(RIG_CENTER_X + spread * 0.5, topCoilY + 14, RIG_CENTER_X + midDeflect, bounds.centerY, fluxColor, 1);
+        drawPixelLine(RIG_CENTER_X + midDeflect, bounds.centerY, RIG_CENTER_X + spread * 0.5, botCoilY, fluxColor, 1);
+    }
+
+    drawEquilibriumMarkers(xEq);
+
+    const coilPulse = Physics.params.F0 > 0 && Math.cos(Physics.state.phi) > 0 ? '#FF0044' : '#FFB000';
+    ctx.fillStyle = '#555555';
+    ctx.fillRect(RIG_CENTER_X - 48, topCoilY, 96, 14);
+    ctx.fillRect(RIG_CENTER_X - 48, botCoilY, 96, 14);
+
+    ctx.fillStyle = coilPulse;
+    for (let x = RIG_CENTER_X - 42; x < RIG_CENTER_X + 42; x += 12) {
+        ctx.fillRect(x, topCoilY + 2, 8, 10);
+        ctx.fillRect(x, botCoilY + 2, 8, 10);
+    }
+
+    const isActiveSelect = Interaction.isDragging || Interaction.isHovering;
+    drawPixelCircle(
+        RIG_CENTER_X,
+        bounds.centerY,
+        bounds.radius,
+        isActiveSelect ? '#FFFFFF' : '#00FFFF',
+        '#FFB000',
+        '#FFFFFF'
+    );
+
+    ctx.fillStyle = '#000000';
+    drawPixelCircle(RIG_CENTER_X, bounds.centerY, Math.max(4, Math.floor(bounds.radius * 0.45)), '#000000', '#00FF66', null);
 }
 
 function drawEnergyBarometer(metrics) {
@@ -722,17 +961,6 @@ function drawEnergyBarometer(metrics) {
         ctx.fillStyle = '#FFB000';
         ctx.fillRect(innerX - 1, bottomY - totalPixels - 1, innerW + 2, 1);
     }
-
-    ctx.font = 'bold 7px Courier New, monospace';
-    ctx.fillStyle = '#00FFFF';
-    ctx.fillText('T', BAR_X + 1, 248);
-    ctx.fillStyle = '#00FF66';
-    ctx.fillText('U', BAR_X + 8, 248);
-    ctx.fillStyle = '#FF0044';
-    ctx.fillText('Q', BAR_X + 15, 248);
-
-    ctx.fillStyle = '#FFB000';
-    ctx.fillText('E_TOT', BAR_X - 1, 258);
 }
 
 function drawOscilloscope(xEq) {
@@ -764,6 +992,8 @@ function drawOscilloscope(xEq) {
     for (let gx = BOX_X + 2; gx < BOX_X + BOX_W - 2; gx += 6) {
         ctx.fillRect(gx, eqPlotY, 3, 1);
     }
+
+    UI.hudScopeEq.style.top = `${eqPlotY * 2 - 8}px`;
 
     const count = Diagnostics.count;
     if (count < 2) return;
@@ -854,21 +1084,6 @@ function drawPhasePortrait(xEq) {
     ctx.fillRect(prevPt.x - 1, prevPt.y - 1, 3, 3);
 }
 
-function drawDiagnosticsLabels() {
-    ctx.font = 'bold 8px Courier New, monospace';
-    ctx.fillStyle = '#FFB000';
-    ctx.fillText('NRG', 225, 10);
-    ctx.fillText('OSCILLOSCOPE: X(T) [M VS TIME]', 254, 10);
-    ctx.fillText('PHASE SPACE: V(X) [M/S VS M]', 254, 128);
-
-    if (Physics.isPaused) {
-        ctx.fillStyle = '#FF0044';
-        ctx.fillRect(10, 248, 86, 14);
-        ctx.fillStyle = '#000000';
-        ctx.fillText('SOLVER PAUSED', 16, 258);
-    }
-}
-
 const TIME_STEP = 1 / 60;
 
 function gameLoop() {
@@ -881,9 +1096,11 @@ function gameLoop() {
 
     const metrics = Physics.getMetrics();
 
-    UI.formula.innerText = metrics.formula;
+    UI.ode.innerHTML = metrics.odeHTML;
+    UI.formula.innerHTML = metrics.formulaHTML;
     UI.wd.innerText = metrics.wd.toFixed(2);
-    UI.delta.innerText = `${metrics.phaseLagDeg.toFixed(1)}°`;
+    UI.delta.innerHTML = `${metrics.phaseLagDeg.toFixed(1)}&deg;`;
+    UI.qFactor.innerHTML = metrics.qFactor;
 
     UI.regime.innerText = metrics.isResonant
         ? `${metrics.regime} [RESONANCE]`
@@ -902,14 +1119,15 @@ function gameLoop() {
     UI.eQloss.innerText = metrics.qLoss.toFixed(2);
     UI.eWdrive.innerText = metrics.wDrive.toFixed(2);
 
-    drawStage();
-    drawEquilibriumMarkers(metrics.xEq);
-    const anchorY = drawTrussAndActuator();
-    const bounds = getPayloadBounds();
-    drawTetherAndDamper(anchorY, bounds.y);
-    drawPayload();
+    drawBaseStage();
+    if (Physics.mode === 'tether') {
+        drawTetherApparatus(metrics.xEq);
+    } else if (Physics.mode === 'buoyancy') {
+        drawBuoyancyApparatus(metrics.xEq);
+    } else if (Physics.mode === 'maglev') {
+        drawMaglevApparatus(metrics.xEq);
+    }
 
-    drawDiagnosticsLabels();
     drawEnergyBarometer(metrics);
     drawOscilloscope(metrics.xEq);
     drawPhasePortrait(metrics.xEq);

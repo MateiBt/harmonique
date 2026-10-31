@@ -3,43 +3,98 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Harmonique: Orbital Mechanics Payload</title>
+    <title>Harmonique: Multi-Domain Oscillator Laboratory</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-    <canvas id="stage" width="480" height="270"></canvas>
+    <div id="top-bar">
+        <div class="brand-block">
+            <span class="brand-title">HARMONIQUE</span>
+            <span class="brand-sub" id="mode-subtitle">ORBITAL TETHER PAYLOAD</span>
+        </div>
+        <div class="mode-selector">
+            <button class="mode-btn active" id="mode-tether" data-mode="tether">I. ORBITAL TETHER (LINEAR)</button>
+            <button class="mode-btn" id="mode-buoyancy" data-mode="buoyancy">II. HYDRO-BUOYANCY SPHERE (FLUID)</button>
+            <button class="mode-btn" id="mode-maglev" data-mode="maglev">III. HELMHOLTZ MAGLEV (FLUX TRAP)</button>
+        </div>
+    </div>
+
+    <div id="stage-wrapper">
+        <canvas id="stage" width="480" height="270"></canvas>
+
+        <div id="canvas-hud">
+            <div class="hud-label" id="hud-rig-title">RIG: LINEAR ELASTIC TETHER</div>
+            <div class="hud-badge hidden" id="hud-pause-badge">SOLVER PAUSED</div>
+
+            <div class="hud-label" id="hud-nrg-title">NRG</div>
+            <div class="hud-nrg-legend" id="hud-nrg-legend">
+                <span class="leg-t"><i>T</i></span>
+                <span class="leg-u"><i>U</i></span>
+                <span class="leg-q"><i>Q</i></span>
+                <div class="leg-tot"><i>E</i><sub>tot</sub></div>
+            </div>
+
+            <div class="hud-label" id="hud-scope-title">
+                OSCILLOSCOPE &mdash; <i>x</i>(<i>t</i>) <span class="hud-unit">[m vs. s]</span>
+            </div>
+            <div class="hud-axis-tag" id="hud-scope-eq"><i>x</i><sub>eq</sub></div>
+
+            <div class="hud-label" id="hud-phase-title">
+                PHASE PORTRAIT &mdash; <i>v</i>(<i>x</i>) <span class="hud-unit">[m/s vs. m]</span>
+            </div>
+            <div class="hud-axis-tag" id="hud-phase-v">+<i>v</i></div>
+            <div class="hud-axis-tag" id="hud-phase-x">+<i>x</i></div>
+        </div>
+    </div>
 
     <div id="formula-bar">
-        <div class="formula-item">SOLUTION: <span id="formula-readout">x(t) = A·exp(-ζω₀t)·cos(ω_d·t - φ) + x_eq</span></div>
-        <div class="formula-item">ω_d: <span id="wd-readout">0.00</span> rad/s</div>
-        <div class="formula-item">PHASE LAG (δ): <span id="delta-readout">0.0°</span></div>
+        <div class="formula-block">
+            <span class="formula-tag">ODE</span>
+            <span class="math-expr" id="ode-readout">
+                <i>m</i><i>x&#776;</i> + <i>c</i><i>x&#775;</i> + <i>k</i><i>x</i> = <i>F</i><sub>0</sub> cos(<i>&omega;t</i>) + <i>mg</i>
+            </span>
+        </div>
+        <div class="formula-block">
+            <span class="formula-tag">ANALYTICAL SOLUTION</span>
+            <span class="math-expr math-green" id="formula-readout">
+                <i>x</i>(<i>t</i>) = <i>A</i> e<sup>&minus;<i>&zeta;&omega;</i><sub>0</sub><i>t</i></sup> cos(<i>&omega;</i><sub>d</sub><i>t</i> &minus; <i>&phi;</i>) + <i>x</i><sub>eq</sub>
+            </span>
+        </div>
+        <div class="formula-metrics">
+            <div class="f-metric"><i>&omega;</i><sub>d</sub>: <span id="wd-readout">0.00</span> <small>rad/s</small></div>
+            <div class="f-metric"><i>&delta;</i>: <span id="delta-readout">0.0&deg;</span></div>
+            <div class="f-metric"><i>Q</i>: <span id="qfactor-readout">&infin;</span></div>
+        </div>
     </div>
 
     <div id="telemetry-bar">
-        <div class="telemetry-item">REGIME: <span id="regime-readout">INIT</span></div>
-        <div class="telemetry-item">ω₀: <span id="w0-readout">0.00</span> rad/s</div>
-        <div class="telemetry-item">ζ: <span id="zeta-readout">0.00</span></div>
-        <div class="telemetry-item">X_EQ: <span id="xeq-readout">0.00</span> m</div>
-        <div class="telemetry-item">E_MECH: <span id="energy-readout">0.00</span> J</div>
-        <div class="telemetry-item">T: <span id="time-readout">0.00</span> s</div>
+        <div class="telemetry-item">REGIME: <span id="regime-readout">UNDERDAMPED</span></div>
+        <div class="telemetry-item"><i>&omega;</i><sub>0</sub>: <span id="w0-readout">3.54</span> <small>rad/s</small></div>
+        <div class="telemetry-item"><i>&zeta;</i>: <span id="zeta-readout">0.11</span></div>
+        <div class="telemetry-item"><i>x</i><sub>eq</sub>: <span id="xeq-readout">0.00</span> <small>m</small></div>
+        <div class="telemetry-item"><i>E</i><sub>mech</sub>: <span id="energy-readout">0.00</span> <small>J</small></div>
+        <div class="telemetry-item"><i>t</i>: <span id="time-readout">0.00</span> <small>s</small></div>
     </div>
 
     <div id="energy-ledger">
-        <div class="ledger-item"><span class="swatch swatch-t"></span>T (KIN): <span id="e-kin-readout">0.00</span> J</div>
-        <div class="ledger-item"><span class="swatch swatch-u"></span>U_EFF: <span id="e-ueff-readout">0.00</span> J</div>
-        <div class="ledger-item">U_S (ELAST): <span id="e-us-readout">0.00</span> J</div>
-        <div class="ledger-item">U_G (GRAV): <span id="e-ug-readout">0.00</span> J</div>
-        <div class="ledger-item"><span class="swatch swatch-q"></span>Q_LOSS: <span id="e-qloss-readout">0.00</span> J</div>
-        <div class="ledger-item">W_DRIVE: <span id="e-wdrive-readout">0.00</span> J</div>
+        <div class="ledger-item"><span class="swatch swatch-t"></span><i>T</i><sub>kin</sub>: <span id="e-kin-readout">0.00</span> J</div>
+        <div class="ledger-item"><span class="swatch swatch-u"></span><i>U</i><sub>eff</sub>: <span id="e-ueff-readout">0.00</span> J</div>
+        <div class="ledger-item"><i>U</i><sub>s</sub> (ELASTIC/BUOY): <span id="e-us-readout">0.00</span> J</div>
+        <div class="ledger-item"><i>U</i><sub>g</sub> (GRAV): <span id="e-ug-readout">0.00</span> J</div>
+        <div class="ledger-item"><span class="swatch swatch-q"></span><i>Q</i><sub>loss</sub>: <span id="e-qloss-readout">0.00</span> J</div>
+        <div class="ledger-item"><i>W</i><sub>drive</sub>: <span id="e-wdrive-readout">0.00</span> J</div>
     </div>
 
     <div id="preset-bar">
         <button class="retro-btn" id="btn-undamped">[1] UNDAMPED</button>
         <button class="retro-btn" id="btn-underdamped">[2] UNDERDAMPED</button>
-        <button class="retro-btn" id="btn-critical">[3] CRITICAL (ζ=1)</button>
+        <button class="retro-btn" id="btn-critical">[3] CRITICAL (<i>&zeta;</i>=1)</button>
         <button class="retro-btn" id="btn-overdamped">[4] OVERDAMPED</button>
-        <button class="retro-btn btn-danger" id="btn-resonance">[5] RESONANCE (ω=ω₀)</button>
+        <button class="retro-btn btn-danger" id="btn-resonance">[5] RESONANCE (<i>&omega;</i>=<i>&omega;</i><sub>0</sub>)</button>
         <button class="retro-btn btn-action" id="btn-impulse">[I] IMPULSE</button>
         <button class="retro-btn btn-action" id="btn-pause">[SPACE] PAUSE</button>
         <button class="retro-btn btn-action" id="btn-reset">[R] RESET</button>
@@ -49,7 +104,7 @@
     <div id="controls-matrix">
         <div class="slider-cell">
             <div class="slider-header">
-                <label for="slider-m">MASS (m)</label>
+                <label for="slider-m"><span id="lbl-m">MASS</span> (<i>m</i>)</label>
                 <span class="slider-val" id="val-m">2.00 kg</span>
             </div>
             <input type="range" id="slider-m" min="0.5" max="10.0" step="0.1" value="2.0">
@@ -57,7 +112,7 @@
 
         <div class="slider-cell">
             <div class="slider-header">
-                <label for="slider-k">STIFFNESS (k)</label>
+                <label for="slider-k"><span id="lbl-k">STIFFNESS</span> (<i>k</i>)</label>
                 <span class="slider-val" id="val-k">25 N/m</span>
             </div>
             <input type="range" id="slider-k" min="5.0" max="100.0" step="1.0" value="25.0">
@@ -65,15 +120,15 @@
 
         <div class="slider-cell">
             <div class="slider-header">
-                <label for="slider-c">HYSTERESIS DAMPING (c)</label>
-                <span class="slider-val" id="val-c">1.50 N·s/m</span>
+                <label for="slider-c"><span id="lbl-c">HYSTERESIS DAMPING</span> (<i>c</i>)</label>
+                <span class="slider-val" id="val-c">1.50 N&middot;s/m</span>
             </div>
             <input type="range" id="slider-c" min="0.0" max="30.0" step="0.01" value="1.5">
         </div>
 
         <div class="slider-cell">
             <div class="slider-header">
-                <label for="slider-f0">DRIVE AMPLITUDE (F₀)</label>
+                <label for="slider-f0">DRIVE AMPLITUDE (<i>F</i><sub>0</sub>)</label>
                 <span class="slider-val" id="val-f0">0.0 N</span>
             </div>
             <input type="range" id="slider-f0" min="0.0" max="30.0" step="0.5" value="0.0">
@@ -81,7 +136,7 @@
 
         <div class="slider-cell">
             <div class="slider-header">
-                <label for="slider-w">DRIVE FREQ (ω)</label>
+                <label for="slider-w">DRIVE FREQUENCY (<i>&omega;</i>)</label>
                 <span class="slider-val" id="val-w">3.50 rad/s</span>
             </div>
             <input type="range" id="slider-w" min="0.5" max="12.0" step="0.01" value="3.5">
@@ -89,8 +144,8 @@
 
         <div class="slider-cell">
             <div class="slider-header">
-                <label for="slider-g">GRAVITY FIELD (g)</label>
-                <span class="slider-val" id="val-g">0.0 m/s²</span>
+                <label for="slider-g">GRAVITY FIELD (<i>g</i>)</label>
+                <span class="slider-val" id="val-g">0.0 m/s<sup>2</sup></span>
             </div>
             <input type="range" id="slider-g" min="0.0" max="20.0" step="0.2" value="0.0">
         </div>
