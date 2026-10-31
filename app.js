@@ -23,7 +23,7 @@ const UNEXTENDED_Y = 125;
 const MIN_X_METERS = -4.2;
 const MAX_X_METERS = 5.8;
 const SPHERE_RADIUS_M = 3.2;
-const MAGLEV_BETA = 0.025;
+const LJ_R0_METERS = 4.5;
 
 const SoundEngine = {
     ctx: null,
@@ -105,13 +105,15 @@ const SoundEngine = {
 };
 
 const Physics = {
-    mode: 'tether',
+    mode: 'spring',
     isPaused: false,
+    adiabaticActive: false,
+    adiabaticTargetK: 12.5,
 
     params: {
         m: 2.0,
         k: 25.0,
-        c: 1.5,
+        b: 1.5,
         F0: 0.0,
         w: 3.5,
         g: 0.0
@@ -133,7 +135,7 @@ const Physics = {
 
     getEquilibriumX: function() {
         const { m, k, g } = this.params;
-        if (this.mode === 'buoyancy') {
+        if (this.mode === 'buoyancy' || this.mode === 'lj') {
             return 0.0;
         }
         return (m * g) / k;
@@ -148,25 +150,29 @@ const Physics = {
             const R = SPHERE_RADIUS_M;
             const uc = Math.max(-R, Math.min(R, u));
             const fRestore = -k * uc * (1.0 - (uc * uc) / (3.0 * R * R));
-            const uEff = 0.5 * k * (uc * uc) * (1.0 - (uc * uc) / (6.0 * R * R)) +
+            const vEff = 0.5 * k * (uc * uc) * (1.0 - (uc * uc) / (6.0 * R * R)) +
                 (Math.abs(u) > R ? (2.0 / 3.0) * k * R * (Math.abs(u) - R) : 0.0);
-            return { fTotal: fRestore, uEff: uEff, usRaw: uEff, ugRaw: -m * g * x };
+            return { fTotal: fRestore, vEff: vEff };
         }
 
-        if (this.mode === 'maglev') {
-            const fSpring = -k * x * (1.0 + MAGLEV_BETA * x * x) + m * g;
-            const uEff = 0.5 * k * (u * u) * (1.0 + 0.5 * MAGLEV_BETA * u * u);
-            const usRaw = 0.5 * k * (x * x) * (1.0 + 0.5 * MAGLEV_BETA * x * x);
-            return { fTotal: fSpring, uEff: uEff, usRaw: usRaw, ugRaw: -m * g * x };
+        if (this.mode === 'lj') {
+            const r0 = LJ_R0_METERS;
+            const epsilon = (k * r0 * r0) / 72.0;
+            const xi = Math.max(0.72, 1.0 + u / r0);
+            const invXi6 = Math.pow(xi, -6);
+            const invXi12 = invXi6 * invXi6;
+            const fLJ = (12.0 * epsilon / r0) * (invXi12 / xi - invXi6 / xi);
+            const vEff = epsilon * (invXi12 - 2.0 * invXi6 + 1.0);
+            return { fTotal: fLJ, vEff: Math.max(0.0, vEff) };
         }
 
         const fLinear = -k * x + m * g;
-        const uEff = 0.5 * k * (u * u);
-        const usRaw = 0.5 * k * (x * x);
-        return { fTotal: fLinear, uEff: uEff, usRaw: usRaw, ugRaw: -m * g * x };
+        const vEff = 0.5 * k * (u * u);
+        return { fTotal: fLinear, vEff: vEff };
     },
 
     resetState: function(initialOffset = 2.0) {
+        this.adiabaticActive = false;
         const xEq = this.getEquilibriumX();
         this.state.x = Math.max(MIN_X_METERS, Math.min(MAX_X_METERS, xEq + initialOffset));
         this.state.v = 0.0;
@@ -176,16 +182,26 @@ const Physics = {
     },
 
     getDerivatives: function(x, v, phi) {
-        const { m, c, F0 } = this.params;
+        const { m, b, F0 } = this.params;
         const fDrive = F0 * Math.cos(phi);
         const { fTotal } = this.getRestoringForceAndPotential(x);
-        const a = (fTotal - c * v + fDrive) / m;
-        const dQ = c * (v * v);
+        const a = (fTotal - b * v + fDrive) / m;
+        const dQ = b * (v * v);
         const dW = fDrive * v;
         return { dx: v, dv: a, dQ: dQ, dW: dW };
     },
 
     stepRK4: function(dt) {
+        if (this.adiabaticActive) {
+            const decayRate = 0.12;
+            this.params.k += (this.adiabaticTargetK - this.params.k) * decayRate * dt;
+            if (Math.abs(this.params.k - this.adiabaticTargetK) < 0.05) {
+                this.params.k = this.adiabaticTargetK;
+                this.adiabaticActive = false;
+            }
+            syncSlidersFromParams();
+        }
+
         const { x, v, phi } = this.state;
         const { m, w } = this.params;
         const xEq = this.getEquilibriumX();
@@ -246,52 +262,74 @@ const Physics = {
     },
 
     getMetrics: function() {
-        const { m, k, c, F0, w } = this.params;
+        const { m, k, b, F0, w } = this.params;
         const { x, v, qLoss, wDrive } = this.state;
 
         const w0 = Math.sqrt(k / m);
-        const zeta = c / (2 * Math.sqrt(k * m));
+        const gamma = b / (2.0 * m);
+        const zeta = b / (2.0 * Math.sqrt(m * k));
         const xEq = this.getEquilibriumX();
-        const wd = zeta < 1.0 ? w0 * Math.sqrt(1.0 - zeta * zeta) : 0.0;
-        const qFactor = zeta > 1e-4 ? (1.0 / (2.0 * zeta)).toFixed(2) : '&infin;';
+        const wd = zeta < 1.0 ? Math.sqrt(w0 * w0 - gamma * gamma) : 0.0;
+        const qNum = b > 1e-4 ? (m * w0) / b : Infinity;
+        const qFactor = b > 1e-4 ? qNum.toFixed(2) : '&infin;';
 
-        let regime = "UNDAMPED";
-        if (zeta > 0 && zeta < 0.995) regime = "UNDERDAMPED";
-        else if (zeta >= 0.995 && zeta <= 1.005) regime = "CRITICAL";
-        else if (zeta > 1.005) regime = "OVERDAMPED";
+        let regime = "Undamped";
+        if (zeta > 0 && zeta < 0.995) regime = "Underdamped";
+        else if (zeta >= 0.995 && zeta <= 1.005) regime = "Critically Damped";
+        else if (zeta > 1.005) regime = "Overdamped";
 
         const isResonant = (F0 > 0) && (Math.abs(w - w0) / w0 < 0.05);
 
-        const phaseLagRad = Math.atan2(2.0 * zeta * (w / w0), 1.0 - (w / w0) ** 2);
-        const phaseLagDeg = (phaseLagRad * 180.0) / Math.PI;
+        const steadyDenom = Math.sqrt(Math.pow(k - m * w * w, 2) + Math.pow(b * w, 2));
+        const steadyAmp = steadyDenom > 1e-6 ? F0 / steadyDenom : 0.0;
+        const phiRad = Math.atan2(b * w, k - m * w * w);
+        const phiDeg = (phiRad * 180.0) / Math.PI;
 
-        let odeHTML = "<i>m</i><i>x&#776;</i> + <i>c</i><i>x&#775;</i> + <i>k</i><i>x</i> = <i>F</i><sub>0</sub> cos(<i>&omega;t</i>) + <i>mg</i>";
+        const wAmp = (qNum * qNum > 0.5)
+            ? w0 * Math.sqrt(1.0 - 1.0 / (2.0 * qNum * qNum))
+            : 0.0;
+
+        let odeHTML = "m<sub>eff</sub> x&#776; + b x&#775; + k(x &minus; x<sub>eq</sub>) = F<sub>0</sub> cos(&omega;t)";
+        let odeSub = "Hooke's law restoring force with viscous damping force F = &minus;bv";
+        let w0FormulaHTML = `&omega;<sub>0</sub> = &radic;<span class="sqrt"><span class="frac"><span>k</span><span>m + m<sub>s</sub>/3</span></span></span>`;
+
         if (this.mode === 'buoyancy') {
-            odeHTML = "<i>m</i><sub>eff</sub><i>x&#776;</i> + <i>c</i><sub>visc</sub><i>x&#775;</i> + <i>&rho;</i><sub>f</sub><i>g&pi;</i>(<i>R</i><sup>2</sup><i>x</i> &minus; <sup>1</sup>&frasl;<sub>3</sub><i>x</i><sup>3</sup>) = <i>F</i><sub>0</sub> cos(<i>&omega;t</i>)";
-        } else if (this.mode === 'maglev') {
-            odeHTML = "<i>m</i><i>x&#776;</i> + <i>c</i><sub>eddy</sub><i>x&#775;</i> + <i>k</i><sub>mag</sub><i>x</i>(1 + <i>&beta;x</i><sup>2</sup>) = <i>F</i><sub>0</sub> cos(<i>&omega;t</i>) + <i>mg</i>";
+            odeHTML = "m x&#776; + b x&#775; + &rho;<sub>w</sub>g&pi;(R<sup>2</sup>x &minus; <sup>1</sup>&frasl;<sub>3</sub>x<sup>3</sup>) = F<sub>0</sub> cos(&omega;t)";
+            odeSub = "Archimedes buoyant force on a sphere of radius R (M4 Problem 2b)";
+            w0FormulaHTML = `&omega;<sub>0</sub> = &radic;<span class="sqrt"><span class="frac"><span>3g</span><span>2R</span></span></span> = &radic;<span class="sqrt"><span class="frac"><span>&rho;<sub>w</sub>g&pi;R<sup>2</sup></span><span>m</span></span></span>`;
+        } else if (this.mode === 'lj') {
+            odeHTML = "m<sub>eff</sub> r&#776; + b r&#775; &minus; <span class='frac'><span>12&epsilon;</span><span>r<sub>0</sub></span></span>[(r<sub>0</sub>/r)<sup>13</sup> &minus; (r<sub>0</sub>/r)<sup>7</sup>] = F<sub>0</sub> cos(&omega;t)";
+            odeSub = "Lennard-Jones potential U(r) = &epsilon;[(r₀/r)¹² &minus; 2(r₀/r)⁶] (M4 Example 1)";
+            w0FormulaHTML = `&omega;<sub>0</sub> = &radic;<span class="sqrt"><span class="frac"><span>U&prime;&prime;(r<sub>0</sub>)</span><span>m<sub>eff</sub></span></span></span> = <span class="frac"><span>12</span><span>r<sub>0</sub></span></span>&radic;<span class="sqrt"><span class="frac"><span>&epsilon;</span><span>m</span></span></span>`;
         }
 
-        let formulaHTML = "<i>x</i>(<i>t</i>) = <i>A</i> cos(<i>&omega;</i><sub>0</sub><i>t</i> &minus; <i>&phi;</i>) + <i>x</i><sub>eq</sub>";
+        let formulaHTML = "x(t) = A cos(&omega;<sub>0</sub>t &minus; &delta;) + x<sub>eq</sub>";
+        let solSub = "Pure harmonic motion with constant phase-space ellipse area I";
         if (F0 > 0) {
-            formulaHTML = "<i>x</i><sub>p</sub>(<i>t</i>) = [<i>F</i><sub>0</sub> / &radic;((<i>k</i>&minus;<i>m&omega;</i><sup>2</sup>)<sup>2</sup> + (<i>c&omega;</i>)<sup>2</sup>)] cos(<i>&omega;t</i> &minus; <i>&delta;</i>) + <i>x</i><sub>eq</sub>";
-        } else if (regime === "UNDERDAMPED") {
-            formulaHTML = "<i>x</i>(<i>t</i>) = <i>A</i> e<sup>&minus;<i>&zeta;&omega;</i><sub>0</sub><i>t</i></sup> cos(<i>&omega;</i><sub>d</sub><i>t</i> &minus; <i>&phi;</i>) + <i>x</i><sub>eq</sub>";
-        } else if (regime === "CRITICAL") {
-            formulaHTML = "<i>x</i>(<i>t</i>) = (<i>C</i><sub>1</sub> + <i>C</i><sub>2</sub><i>t</i>) e<sup>&minus;<i>&omega;</i><sub>0</sub><i>t</i></sup> + <i>x</i><sub>eq</sub>";
-        } else if (regime === "OVERDAMPED") {
-            formulaHTML = "<i>x</i>(<i>t</i>) = <i>C</i><sub>1</sub> e<sup><i>r</i><sub>1</sub><i>t</i></sup> + <i>C</i><sub>2</sub> e<sup><i>r</i><sub>2</sub><i>t</i></sup> + <i>x</i><sub>eq</sub>";
+            formulaHTML = "x(t) = |A<sub>0</sub>| cos(&omega;t &minus; &phi;) + Re(A<sub>+</sub>e<sup>i&omega;<sub>+</sub>t</sup> + A<sub>&minus;</sub>e<sup>i&omega;<sub>&minus;</sub>t</sup>)";
+            solSub = "Transient normal modes &omega;± decay as e^(&minus;bt/2m), leaving steady state |A₀|";
+        } else if (regime === "Underdamped") {
+            formulaHTML = "x(t) = A e<sup>&minus;(b/2m)t</sup> cos(&omega;<sub>d</sub>t &minus; &delta;) + x<sub>eq</sub>";
+            solSub = "Complex roots &omega;± = i(b/2m) &plusmn; &omega;_d produce an inward phase-space spiral";
+        } else if (regime === "Critically Damped") {
+            formulaHTML = "x(t) = (C<sub>1</sub> + C<sub>2</sub>t) e<sup>&minus;&omega;<sub>0</sub>t</sup> + x<sub>eq</sub>";
+            solSub = "Degenerate root b = 2&radic;(mk) yields fastest non-oscillatory equilibrium return";
+        } else if (regime === "Overdamped") {
+            formulaHTML = "x(t) = C<sub>1</sub> e<sup>&minus;&gamma;<sub>+</sub>t</sup> + C<sub>2</sub> e<sup>&minus;&gamma;<sub>&minus;</sub>t</sup> + x<sub>eq</sub>";
+            solSub = "Purely imaginary roots &omega;± (b > 2&radic;mk) decay monotonically along slow eigenvector";
         }
 
-        const T = 0.5 * m * (v * v);
-        const { uEff, usRaw, ugRaw } = this.getRestoringForceAndPotential(x);
-        const Emech = T + uEff;
-        const Eclosed = T + uEff + qLoss;
+        const K = 0.5 * m * (v * v);
+        const { vEff } = this.getRestoringForceAndPotential(x);
+        const Emech = K + vEff;
+        const Eclosed = K + vEff + qLoss;
+        const adiabaticI = (2.0 * Math.PI * Emech) / w0;
 
         return {
             w0, wd, zeta, qFactor, xEq, regime, isResonant,
-            phaseLagDeg, odeHTML, formulaHTML,
-            T, Us: usRaw, Ug: ugRaw, Ueff: uEff, qLoss, wDrive, Emech, Eclosed
+            steadyAmp, phiDeg, wAmp, adiabaticI,
+            odeHTML, odeSub, w0FormulaHTML, formulaHTML, solSub,
+            K, Veff: vEff, qLoss, wDrive, Emech, Eclosed
         };
     }
 };
@@ -331,16 +369,22 @@ const ctx = canvas.getContext('2d');
 
 const UI = {
     modeSubtitle: document.getElementById('mode-subtitle'),
-    hudRigTitle: document.getElementById('hud-rig-title'),
-    hudPauseBadge: document.getElementById('hud-pause-badge'),
+    hudStatusBadge: document.getElementById('hud-status-badge'),
     hudScopeEq: document.getElementById('hud-scope-eq'),
     lblM: document.getElementById('lbl-m'),
     lblK: document.getElementById('lbl-k'),
-    lblC: document.getElementById('lbl-c'),
+    lblB: document.getElementById('lbl-b'),
     ode: document.getElementById('ode-readout'),
+    odeSub: document.getElementById('ode-subnote'),
+    w0Formula: document.getElementById('w0-formula-cell'),
     formula: document.getElementById('formula-readout'),
+    solSub: document.getElementById('solution-subnote'),
     wd: document.getElementById('wd-readout'),
-    delta: document.getElementById('delta-readout'),
+    phi: document.getElementById('phi-readout'),
+    amp: document.getElementById('amp-readout'),
+    wAmp: document.getElementById('wamp-readout'),
+    wPow: document.getElementById('wpow-readout'),
+    adiabatic: document.getElementById('adiabatic-readout'),
     qFactor: document.getElementById('qfactor-readout'),
     regime: document.getElementById('regime-readout'),
     w0: document.getElementById('w0-readout'),
@@ -349,9 +393,7 @@ const UI = {
     energy: document.getElementById('energy-readout'),
     time: document.getElementById('time-readout'),
     eKin: document.getElementById('e-kin-readout'),
-    eUeff: document.getElementById('e-ueff-readout'),
-    eUs: document.getElementById('e-us-readout'),
-    eUg: document.getElementById('e-ug-readout'),
+    eVeff: document.getElementById('e-veff-readout'),
     eQloss: document.getElementById('e-qloss-readout'),
     eWdrive: document.getElementById('e-wdrive-readout'),
     btnPause: document.getElementById('btn-pause'),
@@ -360,8 +402,8 @@ const UI = {
 
 const sliderConfigs = [
     { id: 'slider-m', key: 'm', valId: 'val-m', unit: 'kg', dec: 2, resetE: true },
-    { id: 'slider-k', key: 'k', valId: 'val-k', unit: 'N/m', dec: 0, resetE: true },
-    { id: 'slider-c', key: 'c', valId: 'val-c', unit: 'N·s/m', dec: 2, resetE: false },
+    { id: 'slider-k', key: 'k', valId: 'val-k', unit: 'N/m', dec: 1, resetE: true },
+    { id: 'slider-b', key: 'b', valId: 'val-b', unit: 'N·s/m', dec: 2, resetE: false },
     { id: 'slider-f0', key: 'F0', valId: 'val-f0', unit: 'N', dec: 1, resetE: false },
     { id: 'slider-w', key: 'w', valId: 'val-w', unit: 'rad/s', dec: 2, resetE: false },
     { id: 'slider-g', key: 'g', valId: 'val-g', unit: 'm/s²', dec: 1, resetE: true }
@@ -381,6 +423,7 @@ for (const cfg of sliderConfigs) {
     const slider = document.getElementById(cfg.id);
     const valSpan = document.getElementById(cfg.valId);
     slider.addEventListener('input', (e) => {
+        Physics.adiabaticActive = false;
         const val = parseFloat(e.target.value);
         Physics.params[cfg.key] = val;
         valSpan.innerText = `${val.toFixed(cfg.dec)} ${cfg.unit}`;
@@ -396,71 +439,71 @@ function switchApparatus(mode) {
         btn.classList.toggle('active', btn.dataset.mode === mode);
     });
 
-    if (mode === 'tether') {
-        UI.modeSubtitle.innerText = 'ORBITAL TETHER PAYLOAD';
-        UI.hudRigTitle.innerText = 'RIG: LINEAR ELASTIC TETHER';
-        UI.lblM.innerText = 'PAYLOAD MASS';
-        UI.lblK.innerText = 'TETHER STIFFNESS';
-        UI.lblC.innerText = 'HYSTERESIS DAMPING';
+    if (mode === 'spring') {
+        UI.modeSubtitle.innerText = 'Damped & Driven Harmonic Oscillator';
+        UI.lblM.innerText = 'Effective Mass';
+        UI.lblK.innerText = 'Spring Constant';
+        UI.lblB.innerText = 'Damping Coefficient';
         Physics.params.g = 0.0;
+        Physics.resetState(2.2);
     } else if (mode === 'buoyancy') {
-        UI.modeSubtitle.innerText = 'HYDROSTATIC BUOYANCY SPHERE';
-        UI.hudRigTitle.innerText = 'RIG: ARCHIMEDES FLUID TANK';
-        UI.lblM.innerText = 'EFF. BUOY MASS';
-        UI.lblK.innerText = 'BUOYANCY STIFFNESS';
-        UI.lblC.innerText = 'VISCOUS FLUID DRAG';
+        UI.modeSubtitle.innerText = 'Hydrostatic Floating Sphere (M4 Prob. 2b)';
+        UI.lblM.innerText = 'Sphere + Added Mass';
+        UI.lblK.innerText = 'Waterline Stiffness';
+        UI.lblB.innerText = 'Viscous Wave Drag';
         if (Physics.params.g < 1.0) Physics.params.g = 9.8;
-    } else if (mode === 'maglev') {
-        UI.modeSubtitle.innerText = 'HELMHOLTZ MAGLEV TRAP';
-        UI.hudRigTitle.innerText = 'RIG: MAGNETIC FLUX CAVITY';
-        UI.lblM.innerText = 'CORE MASS';
-        UI.lblK.innerText = 'MAGNETIC STIFFNESS';
-        UI.lblC.innerText = 'EDDY-CURRENT DRAG';
+        Physics.resetState(2.2);
+    } else if (mode === 'lj') {
+        UI.modeSubtitle.innerText = 'Lennard-Jones Atomic Potential (M4 Ex. 1)';
+        UI.lblM.innerText = 'Reduced Mass';
+        UI.lblK.innerText = 'Curvature U″(r₀)';
+        UI.lblB.innerText = 'Radiative Damping';
         Physics.params.g = 0.0;
+        Physics.resetState(1.8);
     }
 
-    Physics.resetState(2.2);
     syncSlidersFromParams();
     Diagnostics.clear();
 }
 
-document.getElementById('mode-tether').addEventListener('click', () => switchApparatus('tether'));
+document.getElementById('mode-spring').addEventListener('click', () => switchApparatus('spring'));
 document.getElementById('mode-buoyancy').addEventListener('click', () => switchApparatus('buoyancy'));
-document.getElementById('mode-maglev').addEventListener('click', () => switchApparatus('maglev'));
+document.getElementById('mode-lj').addEventListener('click', () => switchApparatus('lj'));
 
 function applyPreset(presetName) {
     Physics.isPaused = false;
-    UI.btnPause.innerText = '[SPACE] PAUSE';
-    UI.hudPauseBadge.classList.add('hidden');
+    Physics.adiabaticActive = false;
+    UI.btnPause.innerText = 'Pause';
+    UI.hudStatusBadge.classList.add('hidden');
 
     if (presetName === 'undamped') {
         Physics.params.m = 2.0;
         Physics.params.k = 25.0;
-        Physics.params.c = 0.0;
+        Physics.params.b = 0.0;
         Physics.params.F0 = 0.0;
-        Physics.resetState(2.5);
+        Physics.resetState(2.4);
     } else if (presetName === 'underdamped') {
         Physics.params.m = 2.0;
         Physics.params.k = 25.0;
-        Physics.params.c = 1.5;
+        Physics.params.b = 1.5;
         Physics.params.F0 = 0.0;
-        Physics.resetState(2.8);
+        Physics.resetState(2.6);
     } else if (presetName === 'critical') {
         Physics.params.m = 2.0;
         Physics.params.k = 25.0;
-        Physics.params.c = 2.0 * Math.sqrt(Physics.params.k * Physics.params.m);
+        Physics.params.b = 2.0 * Math.sqrt(Physics.params.m * Physics.params.k);
         Physics.params.F0 = 0.0;
         Physics.resetState(3.2);
     } else if (presetName === 'overdamped') {
         Physics.params.m = 3.0;
         Physics.params.k = 20.0;
-        Physics.params.c = 26.0;
+        Physics.params.b = 26.0;
         Physics.params.F0 = 0.0;
         Physics.resetState(3.2);
     } else if (presetName === 'resonance') {
         Physics.params.m = 2.0;
         Physics.params.k = 25.0;
-        Physics.params.c = 0.45;
+        Physics.params.b = 0.45;
         Physics.params.F0 = 8.0;
         Physics.params.w = Math.sqrt(Physics.params.k / Physics.params.m);
         Physics.resetState(0.0);
@@ -468,6 +511,18 @@ function applyPreset(presetName) {
 
     syncSlidersFromParams();
     Diagnostics.clear();
+}
+
+function triggerAdiabaticWeakening() {
+    Physics.isPaused = false;
+    Physics.params.b = 0.0;
+    Physics.params.F0 = 0.0;
+    if (Math.abs(Physics.state.x - Physics.getEquilibriumX()) < 0.3 && Math.abs(Physics.state.v) < 0.3) {
+        Physics.resetState(2.2);
+    }
+    Physics.adiabaticTargetK = Math.max(5.0, Physics.params.k * 0.5);
+    Physics.adiabaticActive = true;
+    syncSlidersFromParams();
 }
 
 function triggerImpulse() {
@@ -478,8 +533,9 @@ function triggerImpulse() {
 
 function togglePause() {
     Physics.isPaused = !Physics.isPaused;
-    UI.btnPause.innerText = Physics.isPaused ? '[SPACE] RESUME' : '[SPACE] PAUSE';
-    UI.hudPauseBadge.classList.toggle('hidden', !Physics.isPaused);
+    UI.btnPause.innerText = Physics.isPaused ? 'Resume' : 'Pause';
+    UI.hudStatusBadge.innerText = 'Paused';
+    UI.hudStatusBadge.classList.toggle('hidden', !Physics.isPaused);
 }
 
 function resetSimulation() {
@@ -489,7 +545,7 @@ function resetSimulation() {
 
 function toggleAudio() {
     const active = SoundEngine.toggle();
-    UI.btnAudio.innerText = active ? '[M] AUDIO: ON' : '[M] AUDIO: OFF';
+    UI.btnAudio.innerText = active ? 'Audio: On' : 'Audio: Off';
     UI.btnAudio.classList.toggle('active', active);
 }
 
@@ -498,6 +554,7 @@ document.getElementById('btn-underdamped').addEventListener('click', () => apply
 document.getElementById('btn-critical').addEventListener('click', () => applyPreset('critical'));
 document.getElementById('btn-overdamped').addEventListener('click', () => applyPreset('overdamped'));
 document.getElementById('btn-resonance').addEventListener('click', () => applyPreset('resonance'));
+document.getElementById('btn-adiabatic').addEventListener('click', triggerAdiabaticWeakening);
 document.getElementById('btn-impulse').addEventListener('click', triggerImpulse);
 document.getElementById('btn-pause').addEventListener('click', togglePause);
 document.getElementById('btn-reset').addEventListener('click', resetSimulation);
@@ -511,6 +568,8 @@ window.addEventListener('keydown', (e) => {
         resetSimulation();
     } else if (e.code === 'KeyI') {
         triggerImpulse();
+    } else if (e.code === 'KeyA') {
+        triggerAdiabaticWeakening();
     } else if (e.code === 'KeyM') {
         toggleAudio();
     } else if (e.code === 'Digit1') {
@@ -707,7 +766,7 @@ function drawEquilibriumMarkers(xEq) {
     }
 }
 
-function drawTetherApparatus(xEq) {
+function drawSpringApparatus(xEq) {
     for (let i = 0; i < STAR_COUNT; i++) {
         ctx.fillStyle = i % 3 === 0 ? '#555555' : '#FFFFFF';
         ctx.fillRect(stars[i].x, stars[i].y, 1, 1);
@@ -734,9 +793,9 @@ function drawTetherApparatus(xEq) {
     const length = bounds.y - (anchorY + 2);
 
     if (length > 2) {
-        if (Physics.params.c > 0) {
+        if (Physics.params.b > 0) {
             const sleeveHeight = Math.max(8, Math.floor(length * 0.45));
-            const sleeveWidth = Math.round(6 + (Physics.params.c / 30) * 12);
+            const sleeveWidth = Math.round(6 + (Physics.params.b / 30) * 12);
             ctx.fillStyle = '#222222';
             ctx.fillRect(
                 RIG_CENTER_X - Math.floor(sleeveWidth / 2),
@@ -837,7 +896,7 @@ function drawBuoyancyApparatus(xEq) {
         RIG_CENTER_X - bounds.radius + 2,
         bounds.centerY - 1,
         bounds.radius * 2 - 4,
-        3
+        2
     );
 
     const waveAmp = Physics.params.F0 > 0 ? (Physics.params.F0 / 30) * 5.0 : 1.0;
@@ -868,32 +927,37 @@ function drawBuoyancyApparatus(xEq) {
     }
 }
 
-function drawMaglevApparatus(xEq) {
+function drawLennardJonesApparatus(xEq) {
+    const fixedAtomY = 32;
     const bounds = getPayloadBounds();
-    const topCoilY = 16;
-    const botCoilY = 236;
 
-    for (let mLine = -3; mLine <= 3; mLine++) {
-        if (mLine === 0) continue;
-        const spread = mLine * 14;
-        const midDeflect = spread * (1.25 - (bounds.centerY - UNEXTENDED_Y) * 0.004);
-        const fluxColor = Physics.params.F0 > 0 ? '#FF0044' : '#222222';
-        drawPixelLine(RIG_CENTER_X + spread * 0.5, topCoilY + 14, RIG_CENTER_X + midDeflect, bounds.centerY, fluxColor, 1);
-        drawPixelLine(RIG_CENTER_X + midDeflect, bounds.centerY, RIG_CENTER_X + spread * 0.5, botCoilY, fluxColor, 1);
+    let prevWellX = null;
+    let prevWellY = null;
+    for (let py = 58; py <= 250; py += 3) {
+        const u = (py - UNEXTENDED_Y) / PIXELS_PER_METER;
+        const xi = Math.max(0.75, 1.0 + u / LJ_R0_METERS);
+        const vNorm = Math.pow(xi, -12) - 2.0 * Math.pow(xi, -6) + 1.0;
+        const wx = Math.round(36 + Math.min(140, vNorm * 45));
+        if (prevWellX !== null) {
+            drawPixelLine(prevWellX, prevWellY, wx, py, '#222228', 1);
+        }
+        prevWellX = wx;
+        prevWellY = py;
     }
 
     drawEquilibriumMarkers(xEq);
 
-    const coilPulse = Physics.params.F0 > 0 && Math.cos(Physics.state.phi) > 0 ? '#FF0044' : '#FFB000';
-    ctx.fillStyle = '#555555';
-    ctx.fillRect(RIG_CENTER_X - 48, topCoilY, 96, 14);
-    ctx.fillRect(RIG_CENTER_X - 48, botCoilY, 96, 14);
-
-    ctx.fillStyle = coilPulse;
-    for (let x = RIG_CENTER_X - 42; x < RIG_CENTER_X + 42; x += 12) {
-        ctx.fillRect(x, topCoilY + 2, 8, 10);
-        ctx.fillRect(x, botCoilY + 2, 8, 10);
+    const distPx = bounds.centerY - fixedAtomY;
+    const steps = 16;
+    for (let i = 1; i < steps; i++) {
+        const by = Math.round(fixedAtomY + (distPx * i) / steps);
+        const spread = Math.round(6 * Math.sin((i / steps) * Math.PI * 4));
+        ctx.fillStyle = Physics.state.x < -0.2 ? '#FF0044' : '#00FF66';
+        ctx.fillRect(RIG_CENTER_X + spread - 1, by, 2, 2);
+        ctx.fillRect(RIG_CENTER_X - spread - 1, by, 2, 2);
     }
+
+    drawPixelCircle(RIG_CENTER_X, fixedAtomY, 12, '#555555', '#FFB000', '#FFFFFF');
 
     const isActiveSelect = Interaction.isDragging || Interaction.isHovering;
     drawPixelCircle(
@@ -904,16 +968,13 @@ function drawMaglevApparatus(xEq) {
         '#FFB000',
         '#FFFFFF'
     );
-
-    ctx.fillStyle = '#000000';
-    drawPixelCircle(RIG_CENTER_X, bounds.centerY, Math.max(4, Math.floor(bounds.radius * 0.45)), '#000000', '#00FF66', null);
 }
 
 function drawEnergyBarometer(metrics) {
     const BAR_X = 224;
     const BAR_Y = 14;
     const BAR_W = 20;
-    const BAR_H = 224;
+    const BAR_H = 236;
 
     drawPixelBezel(BAR_X, BAR_Y, BAR_W, BAR_H, '#555555');
 
@@ -939,23 +1000,23 @@ function drawEnergyBarometer(metrics) {
             Math.round((totalBudget / scaleRef) * maxPixels)
         );
 
-        const hT = Math.round((metrics.T / totalBudget) * totalPixels);
-        const hU = Math.round((metrics.Ueff / totalBudget) * totalPixels);
-        const hQ = Math.max(0, totalPixels - hT - hU);
+        const hK = Math.round((metrics.K / totalBudget) * totalPixels);
+        const hV = Math.round((metrics.Veff / totalBudget) * totalPixels);
+        const hQ = Math.max(0, totalPixels - hK - hV);
 
-        if (hT > 0) {
+        if (hK > 0) {
             ctx.fillStyle = '#00FFFF';
-            ctx.fillRect(innerX, bottomY - hT, innerW, hT);
+            ctx.fillRect(innerX, bottomY - hK, innerW, hK);
         }
 
-        if (hU > 0) {
+        if (hV > 0) {
             ctx.fillStyle = '#00FF66';
-            ctx.fillRect(innerX, bottomY - hT - hU, innerW, hU);
+            ctx.fillRect(innerX, bottomY - hK - hV, innerW, hV);
         }
 
         if (hQ > 0) {
             ctx.fillStyle = '#FF0044';
-            ctx.fillRect(innerX, bottomY - hT - hU - hQ, innerW, hQ);
+            ctx.fillRect(innerX, bottomY - hK - hV - hQ, innerW, hQ);
         }
 
         ctx.fillStyle = '#FFB000';
@@ -993,7 +1054,8 @@ function drawOscilloscope(xEq) {
         ctx.fillRect(gx, eqPlotY, 3, 1);
     }
 
-    UI.hudScopeEq.style.top = `${eqPlotY * 2 - 8}px`;
+    const stageScaleY = 450.0 / 270.0;
+    UI.hudScopeEq.style.top = `${Math.round(eqPlotY * stageScaleY - 8)}px`;
 
     const count = Diagnostics.count;
     if (count < 2) return;
@@ -1096,36 +1158,50 @@ function gameLoop() {
 
     const metrics = Physics.getMetrics();
 
-    UI.ode.innerHTML = metrics.odeHTML;
-    UI.formula.innerHTML = metrics.formulaHTML;
-    UI.wd.innerText = metrics.wd.toFixed(2);
-    UI.delta.innerHTML = `${metrics.phaseLagDeg.toFixed(1)}&deg;`;
-    UI.qFactor.innerHTML = metrics.qFactor;
+    if (Physics.adiabaticActive) {
+        UI.hudStatusBadge.innerText = 'Adiabatic k → k/2';
+        UI.hudStatusBadge.classList.remove('hidden');
+    } else if (!Physics.isPaused) {
+        UI.hudStatusBadge.classList.add('hidden');
+    }
 
-    UI.regime.innerText = metrics.isResonant
-        ? `${metrics.regime} [RESONANCE]`
-        : metrics.regime;
-    UI.regime.className = metrics.isResonant ? 'warning' : '';
+    UI.ode.innerHTML = metrics.odeHTML;
+    UI.odeSub.innerHTML = metrics.odeSub;
+    UI.w0Formula.innerHTML = metrics.w0FormulaHTML;
+    UI.formula.innerHTML = metrics.formulaHTML;
+    UI.solSub.innerHTML = metrics.solSub;
+
     UI.w0.innerText = metrics.w0.toFixed(2);
     UI.zeta.innerText = metrics.zeta.toFixed(2);
+    UI.wd.innerText = metrics.wd.toFixed(2);
+    UI.qFactor.innerHTML = metrics.qFactor;
+    UI.amp.innerText = metrics.steadyAmp.toFixed(2);
+    UI.phi.innerHTML = `${metrics.phiDeg.toFixed(1)}&deg;`;
+    UI.wAmp.innerText = metrics.wAmp.toFixed(2);
+    UI.wPow.innerText = metrics.w0.toFixed(2);
+    UI.adiabatic.innerText = metrics.adiabaticI.toFixed(2);
+
+    UI.regime.innerText = metrics.isResonant
+        ? `${metrics.regime} (Resonance)`
+        : metrics.regime;
+    UI.regime.className = metrics.isResonant ? 'regime-pill warning' : 'regime-pill';
+
     UI.xEq.innerText = metrics.xEq.toFixed(2);
     UI.energy.innerText = metrics.Emech.toFixed(2);
     UI.time.innerText = Physics.state.t.toFixed(2);
 
-    UI.eKin.innerText = metrics.T.toFixed(2);
-    UI.eUeff.innerText = metrics.Ueff.toFixed(2);
-    UI.eUs.innerText = metrics.Us.toFixed(2);
-    UI.eUg.innerText = metrics.Ug.toFixed(2);
+    UI.eKin.innerText = metrics.K.toFixed(2);
+    UI.eVeff.innerText = metrics.Veff.toFixed(2);
     UI.eQloss.innerText = metrics.qLoss.toFixed(2);
     UI.eWdrive.innerText = metrics.wDrive.toFixed(2);
 
     drawBaseStage();
-    if (Physics.mode === 'tether') {
-        drawTetherApparatus(metrics.xEq);
+    if (Physics.mode === 'spring') {
+        drawSpringApparatus(metrics.xEq);
     } else if (Physics.mode === 'buoyancy') {
         drawBuoyancyApparatus(metrics.xEq);
-    } else if (Physics.mode === 'maglev') {
-        drawMaglevApparatus(metrics.xEq);
+    } else if (Physics.mode === 'lj') {
+        drawLennardJonesApparatus(metrics.xEq);
     }
 
     drawEnergyBarometer(metrics);

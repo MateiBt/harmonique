@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Harmonique: Multi-Domain Oscillator Laboratory</title>
+    <title>Harmonique — Mechanics IV: Oscillations</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&display=swap" rel="stylesheet">
@@ -11,144 +11,226 @@
 </head>
 <body>
 
-    <div id="top-bar">
-        <div class="brand-block">
-            <span class="brand-title">HARMONIQUE</span>
-            <span class="brand-sub" id="mode-subtitle">ORBITAL TETHER PAYLOAD</span>
-        </div>
-        <div class="mode-selector">
-            <button class="mode-btn active" id="mode-tether" data-mode="tether">I. ORBITAL TETHER (LINEAR)</button>
-            <button class="mode-btn" id="mode-buoyancy" data-mode="buoyancy">II. HYDRO-BUOYANCY SPHERE (FLUID)</button>
-            <button class="mode-btn" id="mode-maglev" data-mode="maglev">III. HELMHOLTZ MAGLEV (FLUX TRAP)</button>
-        </div>
-    </div>
+    <div id="workstation">
 
-    <div id="stage-wrapper">
-        <canvas id="stage" width="480" height="270"></canvas>
+        <div id="left-column">
+            <header id="top-bar">
+                <div class="brand-block">
+                    <span class="brand-title">Harmonique</span>
+                    <span class="brand-sub" id="mode-subtitle">Damped &amp; Driven Harmonic Oscillator</span>
+                </div>
+                <div class="mode-selector">
+                    <button class="mode-btn active" id="mode-spring" data-mode="spring">Spring &amp; Damper</button>
+                    <button class="mode-btn" id="mode-buoyancy" data-mode="buoyancy">Floating Sphere</button>
+                    <button class="mode-btn" id="mode-lj" data-mode="lj">Lennard-Jones Bond</button>
+                </div>
+            </header>
 
-        <div id="canvas-hud">
-            <div class="hud-label" id="hud-rig-title">RIG: LINEAR ELASTIC TETHER</div>
-            <div class="hud-badge hidden" id="hud-pause-badge">SOLVER PAUSED</div>
+            <div id="stage-wrapper">
+                <canvas id="stage" width="480" height="270"></canvas>
 
-            <div class="hud-label" id="hud-nrg-title">NRG</div>
-            <div class="hud-nrg-legend" id="hud-nrg-legend">
-                <span class="leg-t"><i>T</i></span>
-                <span class="leg-u"><i>U</i></span>
-                <span class="leg-q"><i>Q</i></span>
-                <div class="leg-tot"><i>E</i><sub>tot</sub></div>
+                <div id="canvas-hud">
+                    <div class="hud-badge hidden" id="hud-status-badge">Paused</div>
+
+                    <div class="hud-label" id="hud-nrg-title">Energy</div>
+                    <div class="hud-nrg-legend" id="hud-nrg-legend">
+                        <span class="leg-k">K</span>
+                        <span class="leg-v">V</span>
+                        <span class="leg-q">Q</span>
+                    </div>
+
+                    <div class="hud-label" id="hud-scope-title">
+                        Displacement x(t) <span class="hud-unit">m vs. s</span>
+                    </div>
+                    <div class="hud-axis-tag" id="hud-scope-eq">x<sub>eq</sub></div>
+
+                    <div class="hud-label" id="hud-phase-title">
+                        Phase Space p(x) <span class="hud-unit">v vs. x</span>
+                    </div>
+                    <div class="hud-axis-tag" id="hud-phase-v">+v</div>
+                    <div class="hud-axis-tag" id="hud-phase-x">+x</div>
+                </div>
             </div>
 
-            <div class="hud-label" id="hud-scope-title">
-                OSCILLOSCOPE &mdash; <i>x</i>(<i>t</i>) <span class="hud-unit">[m vs. s]</span>
+            <div id="preset-bar">
+                <button class="ctrl-btn" id="btn-undamped">Undamped</button>
+                <button class="ctrl-btn" id="btn-underdamped">Underdamped</button>
+                <button class="ctrl-btn" id="btn-critical">Critical (b = 2&radic;mk)</button>
+                <button class="ctrl-btn" id="btn-overdamped">Overdamped</button>
+                <button class="ctrl-btn btn-danger" id="btn-resonance">Resonance (&omega; = &omega;<sub>0</sub>)</button>
+                <button class="ctrl-btn btn-action" id="btn-adiabatic">Adiabatic k &rarr; k/2</button>
+                <button class="ctrl-btn btn-action" id="btn-impulse">Impulse (+v<sub>0</sub>)</button>
+                <button class="ctrl-btn btn-action" id="btn-pause">Pause</button>
+                <button class="ctrl-btn btn-action" id="btn-reset">Reset</button>
+                <button class="ctrl-btn btn-audio" id="btn-audio">Audio: Off</button>
             </div>
-            <div class="hud-axis-tag" id="hud-scope-eq"><i>x</i><sub>eq</sub></div>
 
-            <div class="hud-label" id="hud-phase-title">
-                PHASE PORTRAIT &mdash; <i>v</i>(<i>x</i>) <span class="hud-unit">[m/s vs. m]</span>
+            <div id="controls-matrix">
+                <div class="slider-cell">
+                    <div class="slider-header">
+                        <label for="slider-m"><span id="lbl-m">Effective Mass</span> (m<sub>eff</sub>)</label>
+                        <span class="slider-val" id="val-m">2.00 kg</span>
+                    </div>
+                    <input type="range" id="slider-m" min="0.5" max="10.0" step="0.1" value="2.0">
+                </div>
+
+                <div class="slider-cell">
+                    <div class="slider-header">
+                        <label for="slider-k"><span id="lbl-k">Effective Stiffness</span> (k<sub>eff</sub>)</label>
+                        <span class="slider-val" id="val-k">25.0 N/m</span>
+                    </div>
+                    <input type="range" id="slider-k" min="5.0" max="100.0" step="0.5" value="25.0">
+                </div>
+
+                <div class="slider-cell">
+                    <div class="slider-header">
+                        <label for="slider-b"><span id="lbl-b">Damping Coefficient</span> (b)</label>
+                        <span class="slider-val" id="val-b">1.50 N&middot;s/m</span>
+                    </div>
+                    <input type="range" id="slider-b" min="0.0" max="30.0" step="0.01" value="1.5">
+                </div>
+
+                <div class="slider-cell">
+                    <div class="slider-header">
+                        <label for="slider-f0">Driving Amplitude (F<sub>0</sub>)</label>
+                        <span class="slider-val" id="val-f0">0.0 N</span>
+                    </div>
+                    <input type="range" id="slider-f0" min="0.0" max="30.0" step="0.5" value="0.0">
+                </div>
+
+                <div class="slider-cell">
+                    <div class="slider-header">
+                        <label for="slider-w">Driving Frequency (&omega;)</label>
+                        <span class="slider-val" id="val-w">3.50 rad/s</span>
+                    </div>
+                    <input type="range" id="slider-w" min="0.5" max="12.0" step="0.01" value="3.5">
+                </div>
+
+                <div class="slider-cell">
+                    <div class="slider-header">
+                        <label for="slider-g">Gravitational Field (g)</label>
+                        <span class="slider-val" id="val-g">0.0 m/s<sup>2</sup></span>
+                    </div>
+                    <input type="range" id="slider-g" min="0.0" max="20.0" step="0.2" value="0.0">
+                </div>
             </div>
-            <div class="hud-axis-tag" id="hud-phase-v">+<i>v</i></div>
-            <div class="hud-axis-tag" id="hud-phase-x">+<i>x</i></div>
-        </div>
-    </div>
 
-    <div id="formula-bar">
-        <div class="formula-block">
-            <span class="formula-tag">ODE</span>
-            <span class="math-expr" id="ode-readout">
-                <i>m</i><i>x&#776;</i> + <i>c</i><i>x&#775;</i> + <i>k</i><i>x</i> = <i>F</i><sub>0</sub> cos(<i>&omega;t</i>) + <i>mg</i>
-            </span>
-        </div>
-        <div class="formula-block">
-            <span class="formula-tag">ANALYTICAL SOLUTION</span>
-            <span class="math-expr math-green" id="formula-readout">
-                <i>x</i>(<i>t</i>) = <i>A</i> e<sup>&minus;<i>&zeta;&omega;</i><sub>0</sub><i>t</i></sup> cos(<i>&omega;</i><sub>d</sub><i>t</i> &minus; <i>&phi;</i>) + <i>x</i><sub>eq</sub>
-            </span>
-        </div>
-        <div class="formula-metrics">
-            <div class="f-metric"><i>&omega;</i><sub>d</sub>: <span id="wd-readout">0.00</span> <small>rad/s</small></div>
-            <div class="f-metric"><i>&delta;</i>: <span id="delta-readout">0.0&deg;</span></div>
-            <div class="f-metric"><i>Q</i>: <span id="qfactor-readout">&infin;</span></div>
-        </div>
-    </div>
-
-    <div id="telemetry-bar">
-        <div class="telemetry-item">REGIME: <span id="regime-readout">UNDERDAMPED</span></div>
-        <div class="telemetry-item"><i>&omega;</i><sub>0</sub>: <span id="w0-readout">3.54</span> <small>rad/s</small></div>
-        <div class="telemetry-item"><i>&zeta;</i>: <span id="zeta-readout">0.11</span></div>
-        <div class="telemetry-item"><i>x</i><sub>eq</sub>: <span id="xeq-readout">0.00</span> <small>m</small></div>
-        <div class="telemetry-item"><i>E</i><sub>mech</sub>: <span id="energy-readout">0.00</span> <small>J</small></div>
-        <div class="telemetry-item"><i>t</i>: <span id="time-readout">0.00</span> <small>s</small></div>
-    </div>
-
-    <div id="energy-ledger">
-        <div class="ledger-item"><span class="swatch swatch-t"></span><i>T</i><sub>kin</sub>: <span id="e-kin-readout">0.00</span> J</div>
-        <div class="ledger-item"><span class="swatch swatch-u"></span><i>U</i><sub>eff</sub>: <span id="e-ueff-readout">0.00</span> J</div>
-        <div class="ledger-item"><i>U</i><sub>s</sub> (ELASTIC/BUOY): <span id="e-us-readout">0.00</span> J</div>
-        <div class="ledger-item"><i>U</i><sub>g</sub> (GRAV): <span id="e-ug-readout">0.00</span> J</div>
-        <div class="ledger-item"><span class="swatch swatch-q"></span><i>Q</i><sub>loss</sub>: <span id="e-qloss-readout">0.00</span> J</div>
-        <div class="ledger-item"><i>W</i><sub>drive</sub>: <span id="e-wdrive-readout">0.00</span> J</div>
-    </div>
-
-    <div id="preset-bar">
-        <button class="retro-btn" id="btn-undamped">[1] UNDAMPED</button>
-        <button class="retro-btn" id="btn-underdamped">[2] UNDERDAMPED</button>
-        <button class="retro-btn" id="btn-critical">[3] CRITICAL (<i>&zeta;</i>=1)</button>
-        <button class="retro-btn" id="btn-overdamped">[4] OVERDAMPED</button>
-        <button class="retro-btn btn-danger" id="btn-resonance">[5] RESONANCE (<i>&omega;</i>=<i>&omega;</i><sub>0</sub>)</button>
-        <button class="retro-btn btn-action" id="btn-impulse">[I] IMPULSE</button>
-        <button class="retro-btn btn-action" id="btn-pause">[SPACE] PAUSE</button>
-        <button class="retro-btn btn-action" id="btn-reset">[R] RESET</button>
-        <button class="retro-btn btn-audio" id="btn-audio">[M] AUDIO: OFF</button>
-    </div>
-
-    <div id="controls-matrix">
-        <div class="slider-cell">
-            <div class="slider-header">
-                <label for="slider-m"><span id="lbl-m">MASS</span> (<i>m</i>)</label>
-                <span class="slider-val" id="val-m">2.00 kg</span>
+            <div id="energy-ledger">
+                <div class="ledger-item"><span class="swatch swatch-k"></span>K: <span id="e-kin-readout">0.00</span> J</div>
+                <div class="ledger-item"><span class="swatch swatch-v"></span>V<sub>eff</sub>(x): <span id="e-veff-readout">0.00</span> J</div>
+                <div class="ledger-item"><span class="swatch swatch-q"></span>Q<sub>diss</sub>: <span id="e-qloss-readout">0.00</span> J</div>
+                <div class="ledger-item">W<sub>drive</sub>: <span id="e-wdrive-readout">0.00</span> J</div>
+                <div class="ledger-item">E<sub>mech</sub>: <span id="energy-readout">0.00</span> J</div>
+                <div class="ledger-item">x<sub>eq</sub>: <span id="xeq-readout">0.00</span> m</div>
+                <div class="ledger-item">t: <span id="time-readout">0.00</span> s</div>
             </div>
-            <input type="range" id="slider-m" min="0.5" max="10.0" step="0.1" value="2.0">
         </div>
 
-        <div class="slider-cell">
-            <div class="slider-header">
-                <label for="slider-k"><span id="lbl-k">STIFFNESS</span> (<i>k</i>)</label>
-                <span class="slider-val" id="val-k">25 N/m</span>
+        <aside id="right-column">
+            <div class="eq-card">
+                <div class="eq-card-header">
+                    <span class="eq-title">Governing Equation of Motion</span>
+                    <span class="regime-pill" id="regime-readout">Underdamped</span>
+                </div>
+                <div class="eq-display" id="ode-readout">
+                    m<sub>eff</sub> x&#776; + b x&#775; + k<sub>eff</sub>(x &minus; x<sub>eq</sub>) = F<sub>0</sub> cos(&omega;t)
+                </div>
+                <div class="eq-subnote" id="ode-subnote">
+                    Linearized stiffness k<sub>eff</sub> = V&prime;&prime;(x<sub>eq</sub>) about static equilibrium &part;V/&part;x = 0
+                </div>
             </div>
-            <input type="range" id="slider-k" min="5.0" max="100.0" step="1.0" value="25.0">
-        </div>
 
-        <div class="slider-cell">
-            <div class="slider-header">
-                <label for="slider-c"><span id="lbl-c">HYSTERESIS DAMPING</span> (<i>c</i>)</label>
-                <span class="slider-val" id="val-c">1.50 N&middot;s/m</span>
+            <div class="eq-card">
+                <div class="eq-card-header">
+                    <span class="eq-title">Analytical Solution x(t)</span>
+                </div>
+                <div class="eq-display eq-green" id="formula-readout">
+                    x(t) = A e<sup>&minus;&gamma;t</sup> cos(&omega;<sub>d</sub>t &minus; &delta;) + |A<sub>0</sub>| cos(&omega;t &minus; &phi;) + x<sub>eq</sub>
+                </div>
+                <div class="eq-subnote" id="solution-subnote">
+                    Superposition of decaying homogeneous transient and steady-state driven response
+                </div>
             </div>
-            <input type="range" id="slider-c" min="0.0" max="30.0" step="0.01" value="1.5">
-        </div>
 
-        <div class="slider-cell">
-            <div class="slider-header">
-                <label for="slider-f0">DRIVE AMPLITUDE (<i>F</i><sub>0</sub>)</label>
-                <span class="slider-val" id="val-f0">0.0 N</span>
-            </div>
-            <input type="range" id="slider-f0" min="0.0" max="30.0" step="0.5" value="0.0">
-        </div>
+            <div class="eq-card eq-fundamentals">
+                <div class="eq-card-header">
+                    <span class="eq-title">Fundamental Oscillator Relations</span>
+                </div>
 
-        <div class="slider-cell">
-            <div class="slider-header">
-                <label for="slider-w">DRIVE FREQUENCY (<i>&omega;</i>)</label>
-                <span class="slider-val" id="val-w">3.50 rad/s</span>
-            </div>
-            <input type="range" id="slider-w" min="0.5" max="12.0" step="0.01" value="3.5">
-        </div>
+                <div class="fund-row">
+                    <div class="fund-name">Small-Oscillation &omega;<sub>0</sub></div>
+                    <div class="fund-math" id="w0-formula-cell">
+                        &omega;<sub>0</sub> = &radic;<span class="sqrt"><span class="frac"><span>V&prime;&prime;(x<sub>eq</sub>)</span><span>m<sub>eff</sub></span></span></span> = &radic;<span class="sqrt"><span class="frac"><span>k<sub>eff</sub></span><span>m<sub>eff</sub></span></span></span>
+                    </div>
+                    <div class="fund-val"><span id="w0-readout">3.54</span> rad/s</div>
+                </div>
 
-        <div class="slider-cell">
-            <div class="slider-header">
-                <label for="slider-g">GRAVITY FIELD (<i>g</i>)</label>
-                <span class="slider-val" id="val-g">0.0 m/s<sup>2</sup></span>
+                <div class="fund-row">
+                    <div class="fund-name">Damping Rate &amp; Ratio</div>
+                    <div class="fund-math">
+                        &gamma; = <span class="frac"><span>b</span><span>2m</span></span> , &nbsp; &zeta; = <span class="frac"><span>b</span><span>2&radic;<span class="sqrt">mk</span></span></span>
+                    </div>
+                    <div class="fund-val">&zeta; = <span id="zeta-readout">0.11</span></div>
+                </div>
+
+                <div class="fund-row">
+                    <div class="fund-name">Damped Frequency</div>
+                    <div class="fund-math">
+                        &omega;<sub>d</sub> = &radic;<span class="sqrt">&omega;<sub>0</sub><sup>2</sup> &minus; <span class="frac"><span>b<sup>2</sup></span><span>4m<sup>2</sup></span></span></span>
+                    </div>
+                    <div class="fund-val"><span id="wd-readout">3.52</span> rad/s</div>
+                </div>
+
+                <div class="fund-row">
+                    <div class="fund-name">Quality Factor</div>
+                    <div class="fund-math">
+                        Q = <span class="frac"><span>m&omega;<sub>0</sub></span><span>b</span></span> &approx; <span class="frac"><span>&omega;<sub>0</sub></span><span>&Delta;&omega;</span></span>
+                    </div>
+                    <div class="fund-val" id="qfactor-readout">4.71</div>
+                </div>
+
+                <div class="fund-row">
+                    <div class="fund-name">Steady Amplitude</div>
+                    <div class="fund-math">
+                        |A<sub>0</sub>| = <span class="frac"><span>F<sub>0</sub></span><span>&radic;<span class="sqrt">(k &minus; m&omega;<sup>2</sup>)<sup>2</sup> + b<sup>2</sup>&omega;<sup>2</sup></span></span></span>
+                    </div>
+                    <div class="fund-val"><span id="amp-readout">0.00</span> m</div>
+                </div>
+
+                <div class="fund-row">
+                    <div class="fund-name">Driven Phase Lag</div>
+                    <div class="fund-math">
+                        tan &phi; = <span class="frac"><span>b&omega;</span><span>k &minus; m&omega;<sup>2</sup></span></span>
+                    </div>
+                    <div class="fund-val" id="phi-readout">0.0&deg;</div>
+                </div>
+
+                <div class="fund-row">
+                    <div class="fund-name">Amplitude Resonance</div>
+                    <div class="fund-math">
+                        &omega;<sub>amp</sub> = &omega;<sub>0</sub>&radic;<span class="sqrt">1 &minus; <span class="frac"><span>1</span><span>2Q<sup>2</sup></span></span></span>
+                    </div>
+                    <div class="fund-val"><span id="wamp-readout">3.49</span> rad/s</div>
+                </div>
+
+                <div class="fund-row">
+                    <div class="fund-name">Power / Vel. Peak</div>
+                    <div class="fund-math">
+                        &omega;<sub>vel</sub> = &omega;<sub>pow</sub> = &radic;<span class="sqrt"><span class="frac"><span>k<sub>eff</sub></span><span>m<sub>eff</sub></span></span></span>
+                    </div>
+                    <div class="fund-val"><span id="wpow-readout">3.54</span> rad/s</div>
+                </div>
+
+                <div class="fund-row">
+                    <div class="fund-name">Adiabatic Invariant</div>
+                    <div class="fund-math">
+                        I = &#8750; p dx = <span class="frac"><span>2&pi;E<sub>mech</sub></span><span>&omega;<sub>0</sub></span></span> &prop; A<sup>2</sup>&radic;<span class="sqrt">km</span>
+                    </div>
+                    <div class="fund-val"><span id="adiabatic-readout">0.00</span> J&middot;s</div>
+                </div>
             </div>
-            <input type="range" id="slider-g" min="0.0" max="20.0" step="0.2" value="0.0">
-        </div>
+        </aside>
+
     </div>
 
     <script src="app.js"></script>
