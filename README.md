@@ -26,3 +26,5 @@ Just open the link here: https://mateibt.github.io/harmonique/
   - `Space` - Pause / resume
   - `R` - Reset
   - `M` - Toggle audio ticks
+
+  Note: I made this project was made in the Stardance hackathon, mostly remade the design. The last changes couldn't have been submitted to a devlog due to the fact that the last hour/s of work weren't available on the devlog submission.
