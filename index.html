@@ -10,6 +10,7 @@
 
 <div id="app">
   <div id="left">
+    <!-- title + mode tabs -->
     <div class="bar">
       <b>Harmonique</b>
       <div>
@@ -21,6 +22,7 @@
 
     <canvas id="cv" width="720" height="380"></canvas>
 
+    <!-- presets -->
     <div class="btns">
       <button id="b_und">Undamped</button>
       <button id="b_undp">Underdamped</button>
@@ -34,33 +36,35 @@
       <button id="b_aud">Audio: Off</button>
     </div>
 
-    <div class="sliders">
-      <div>
-        <span>m: <b id="v_m">2.0</b> kg</span>
-        <input type="range" id="s_m" min="0.5" max="10" step="0.1" value="2">
-      </div>
-      <div>
-        <span>k: <b id="v_k">25.0</b> N/m</span>
-        <input type="range" id="s_k" min="5" max="100" step="0.5" value="25">
-      </div>
-      <div>
-        <span>b: <b id="v_b">1.50</b> N&middot;s/m</span>
-        <input type="range" id="s_b" min="0" max="30" step="0.05" value="1.5">
-      </div>
-      <div>
-        <span>F<sub>0</sub>: <b id="v_f">0.0</b> N</span>
-        <input type="range" id="s_f" min="0" max="30" step="0.5" value="0">
-      </div>
-      <div>
-        <span>&omega;: <b id="v_w">3.50</b> rad/s</span>
-        <input type="range" id="s_w" min="0.5" max="12" step="0.05" value="3.5">
-      </div>
-      <div>
-        <span>g: <b id="v_g">0.0</b> m/s<sup>2</sup></span>
-        <input type="range" id="s_g" min="0" max="20" step="0.2" value="0">
-      </div>
-    </div>
+    <!-- parameter sliders -->
+        <div class="sliders">
+            <div>
+                <span>m: <b id="v_m">2.0</b> kg</span>
+                <input type="range" id="s_m" min="0.5" max="10" step="0.1" value="2">
+            </div>
+            <div>
+                <span>k: <b id="v_k">25.0</b> N/m</span>
+                <input type="range" id="s_k" min="5" max="100" step="0.5" value="25">
+            </div>
+            <div>
+                <span>b: <b id="v_b">1.50</b> N&middot;s/m</span>
+                <input type="range" id="s_b" min="0" max="30" step="0.05" value="1.5">
+            </div>
+            <div>
+                <span>F<sub>0</sub>: <b id="v_f">0.0</b> N</span>
+                <input type="range" id="s_f" min="0" max="30" step="0.5" value="0">
+            </div>
+            <div>
+                <span>&omega;: <b id="v_w">3.50</b> rad/s</span>
+                <input type="range" id="s_w" min="0.5" max="12" step="0.05" value="3.5">
+            </div>
+            <div>
+                <span>g: <b id="v_g">0.0</b> m/s<sup>2</sup></span>
+                <input type="range" id="s_g" min="0" max="20" step="0.2" value="0">
+            </div>
+        </div>
 
+        <!-- energy readouts -->
     <div class="ebar">
       <span>K: <b id="o_k">0.00</b> J</span>
       <span>V<sub>eff</sub>: <b id="o_v">0.00</b> J</span>
@@ -73,30 +77,33 @@
     </div>
   </div>
 
-  <div id="right">
-    <div class="card">
-      <div class="row_h"><span>ODE</span><b id="o_reg">Underdamped</b></div>
-      <div class="eq" id="o_ode">m x&#776; + b x&#775; + k(x &minus; x<sub>eq</sub>) = F<sub>0</sub> cos(&omega;t)</div>
-    </div>
+	<div id="right">
+		<!-- equation of motion -->
+		<div class="card">
+			<div class="row_h"><span>ODE</span><b id="o_reg">Underdamped</b></div>
+			<div class="eq" id="o_ode">m x&#776; + b x&#775; + k(x &minus; x<sub>eq</sub>) = F<sub>0</sub> cos(&omega;t)</div>
+		</div>
 
-    <div class="card">
-      <div class="row_h"><span>x(t)</span></div>
-      <div class="eq" id="o_sol">x(t) = A e<sup>&minus;(b/2m)t</sup> cos(&omega;<sub>d</sub>t &minus; &delta;) + x<sub>eq</sub></div>
-    </div>
+		<!-- solution form, changes with regime -->
+		<div class="card">
+			<div class="row_h"><span>x(t)</span></div>
+			<div class="eq" id="o_sol">x(t) = A e<sup>&minus;(b/2m)t</sup> cos(&omega;<sub>d</sub>t &minus; &delta;) + x<sub>eq</sub></div>
+		</div>
 
-    <div class="card">
-      <div class="row"><span>&omega;<sub>0</sub> = &radic;(k / m)</span><b id="o_w0">3.54</b></div>
-      <div class="row"><span>&zeta; = b / (2&radic;(mk))</span><b id="o_zt">0.11</b></div>
-      <div class="row"><span>&omega;<sub>d</sub> = &radic;(&omega;<sub>0</sub><sup>2</sup> &minus; b<sup>2</sup>/4m<sup>2</sup>)</span><b id="o_wd">3.52</b></div>
-      <div class="row"><span>Q = m&omega;<sub>0</sub> / b</span><b id="o_qf">4.71</b></div>
-      <div class="row"><span>x<sub>eq</sub> = mg / k</span><b id="o_xeq">0.00</b></div>
-      <div class="row"><span>|A<sub>0</sub>| = F<sub>0</sub> / &radic;((k&minus;m&omega;<sup>2</sup>)<sup>2</sup> + b<sup>2</sup>&omega;<sup>2</sup>)</span><b id="o_amp">0.00</b></div>
-      <div class="row"><span>tan &phi; = b&omega; / (k &minus; m&omega;<sup>2</sup>)</span><b id="o_phi">0.0&deg;</b></div>
-      <div class="row"><span>&omega;<sub>amp</sub> = &omega;<sub>0</sub>&radic;(1 &minus; 1/2Q<sup>2</sup>)</span><b id="o_wa">3.49</b></div>
-      <div class="row"><span>&omega;<sub>vel</sub> = &omega;<sub>pow</sub> = &omega;<sub>0</sub></span><b id="o_wv">3.54</b></div>
-      <div class="row"><span>I = &#8750; p dx = 2&pi;E / &omega;<sub>0</sub></span><b id="o_adi">0.00</b></div>
-    </div>
-  </div>
+		<!-- derived quantities -->
+		<div class="card">
+			<div class="row"><span>&omega;<sub>0</sub> = &radic;(k / m)</span><b id="o_w0">3.54</b></div>
+			<div class="row"><span>&zeta; = b / (2&radic;(mk))</span><b id="o_zt">0.11</b></div>
+			<div class="row"><span>&omega;<sub>d</sub> = &radic;(&omega;<sub>0</sub><sup>2</sup> &minus; b<sup>2</sup>/4m<sup>2</sup>)</span><b id="o_wd">3.52</b></div>
+			<div class="row"><span>Q = m&omega;<sub>0</sub> / b</span><b id="o_qf">4.71</b></div>
+			<div class="row"><span>x<sub>eq</sub> = mg / k</span><b id="o_xeq">0.00</b></div>
+			<div class="row"><span>|A<sub>0</sub>| = F<sub>0</sub> / &radic;((k&minus;m&omega;<sup>2</sup>)<sup>2</sup> + b<sup>2</sup>&omega;<sup>2</sup>)</span><b id="o_amp">0.00</b></div>
+			<div class="row"><span>tan &phi; = b&omega; / (k &minus; m&omega;<sup>2</sup>)</span><b id="o_phi">0.0&deg;</b></div>
+			<div class="row"><span>&omega;<sub>amp</sub> = &omega;<sub>0</sub>&radic;(1 &minus; 1/2Q<sup>2</sup>)</span><b id="o_wa">3.49</b></div>
+			<div class="row"><span>&omega;<sub>vel</sub> = &omega;<sub>pow</sub> = &omega;<sub>0</sub></span><b id="o_wv">3.54</b></div>
+			<div class="row"><span>I = &#8750; p dx = 2&pi;E / &omega;<sub>0</sub></span><b id="o_adi">0.00</b></div>
+		</div>
+	</div>
 </div>
 
 <script src="app.js"></script>
